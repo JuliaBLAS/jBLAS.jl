@@ -1,0 +1,32 @@
+[[CpuId]]
+deps = ["InteractiveUtils", "Markdown", "Pkg", "Test"]
+git-tree-sha1 = "44529456cba0185724fc4bb995943416c5d94be3"
+uuid = "adafc99b-e345-5852-983c-f28acb93d879"
+version = "0.2.0"
+
+[[InteractiveUtils]]
+uuid = "b77e0a4c-d291-57a0-90e8-8db25a27a240"
+
+[[LinearAlgebra]]
+uuid = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+
+[[Markdown]]
+uuid = "d6f4376e-aef5-505a-96c1-9c027394607a"
+
+[[Pkg]]
+uuid = "44cfe95a-1eb2-52ea-b672-e2afdf69b78f"
+
+[[Random]]
+uuid = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+
+[[StaticArrays]]
+deps = ["InteractiveUtils", "LinearAlgebra", "Random", "Statistics", "Test"]
+git-tree-sha1 = "d998a83bc2cd507e12b08203e7523f2e60ac9ee6"
+uuid = "90137ffa-7385-5640-81b9-e52037218182"
+version = "0.8.2"
+
+[[Statistics]]
+uuid = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
+
+[[Test]]
+uuid = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
