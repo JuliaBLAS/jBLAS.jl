@@ -46,7 +46,7 @@ and the optimal kernel is
 matrix multiplication.
 """
 function pick_kernel_size(::Type{Float64} = Float64) where T
-    register_size == 32 ? (4,16,2) : (8,16,14)  #assumes size is either 32 or 64
+    register_size == 32 ? (4,8,6) : (8,16,14)  #assumes size is either 32 or 64
 end
 
 using Base: llvmcall
@@ -282,17 +282,45 @@ end
 
 # @generated function smul!(D::SizedArray{Tuple{M,P},T}, A::SizedArray{Tuple{M,N},T}, X::SizedArray{Tuple{N,P},T}) where {T,M,N,P}
 
+"""
+jmul!(D::MMatrix{M,P,T}, A::MMatrix{M,N,T}, X::MMatrix{N,P,T},
+    ::Val{Aprefetch_freq} = Val(7), ::Val{Xprefetch_freq} = Val(7),
+    ::Val{A_loc} = Val(3), ::Val{X_loc} = Val(3), ::Val{D_loc} = Val(3))
+
+It may take some playing with the prefetching arguments.
+
+jmul!(D, A, X)
+
+calculates D = A * X
+
+
+jmul!(D, A, X, Val(Aprefetch), Val(Xprefetch))
+
+The prefetch val options determine the prefetch lag. That is, how far in advance will a prefetch instruction be sent?
+
+"""
 @generated function jmul!(D::MMatrix{M,P,T}, A::MMatrix{M,N,T}, X::MMatrix{N,P,T},
-    ::Val{Aprefetch_freq} = Val(4), ::Val{Xprefetch_freq} = Val(4),
-    ::Val{A_loc} = Val(3), ::Val{X_loc} = Val(3), ::Val{D_loc} = Val(2)) where {T,M,N,P,Aprefetch_freq,Xprefetch_freq,A_loc,X_loc,D_loc}#,Aprefetch_freq2,Xprefetch_freq2,A_loc2,X_loc2}
+    ::Val{Aprefetch_freq} = Val(7), ::Val{Xprefetch_freq} = Val(7),
+    ::Val{A_loc} = Val(3), ::Val{X_loc} = Val(3), ::Val{D_loc} = Val(3)) where {T,M,N,P,Aprefetch_freq,Xprefetch_freq,A_loc,X_loc,D_loc}#,Aprefetch_freq2,Xprefetch_freq2,A_loc2,X_loc2}
     # ,::Val{Aprefetch_freq2} = Val(8), ::Val{Xprefetch_freq2} = Val(8),
     # ::Val{A_loc2} = Val(2), ::Val{X_loc2} = Val(2)) where {T,M,N,P,Aprefetch_freq,Xprefetch_freq,A_loc,X_loc,D_loc,Aprefetch_freq2,Xprefetch_freq2,A_loc2,X_loc2}
+
+    # Preftech freq actually very architecture dependendent!!!
+    # Going to have to pick that somehow, too.
+    # For now, if it isn't AVX512, we'll assume it should be much less aggressive.
 
 # @generated function smul!(D::SizedArray{Tuple{M,P},T}, A::SizedArray{Tuple{M,N},T}, X::SizedArray{Tuple{N,P},T}) where {T,M,N,P}
     # t_size = sizeof(T)
     # cacheline_size = 64 ÷ t_size
     # N = avx512 ? 64 ÷ t_size : 32 ÷ t_size
     vector_length, rows, cols = pick_kernel_size(T) #VL = VecLength
+
+    if vector_length == 4
+        Aprefetch_freq *= 8
+        Xprefetch_freq *= 8
+    end
+
+
     row_chunks, row_remainder = divrem(M, rows)
     col_chunks, col_remainder = divrem(P, cols)
 
