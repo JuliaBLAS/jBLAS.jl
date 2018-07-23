@@ -55,6 +55,9 @@ end
 @inline function vstore!(x::Ptr{T}, v::Vec{N,T}) where {N,T}
     unsafe_store!(Base.unsafe_convert(Ptr{Vec{N,T}}, x), v)
 end
+@inline function vstore!(x::Ptr{T}, v::T) where {N,T}
+    unsafe_store!(x, v)
+end
 @inline function vstore!(x::Ptr{Vec{N,T}}, v::Vec{N,T}) where {N,T}
     unsafe_store!(x, v)
 end
@@ -199,6 +202,192 @@ end
 #     q, qa = create_quote()
 #     for n ∈ 1:N
 #         push!(qa, :(x * y + z[$n]))
+#     end
+# #     q
+# # end
+#
+#
+# @generated function Base.:+(x::Vec{N,Core.VecElement{T}}, y::Vec{N,Core.VecElement{T}}) where {N,T}
+#     q, qa = create_quote()
+#     for n ∈ 1:N
+#         push!(qa, :(Core.VecElement(x[$n].value + y[$n].value)))
+#     end
+#     q
+# end
+# @generated function Base.:+(x::T, y::Vec{N,Core.VecElement{T}}) where {N,T<:Number}
+#     q, qa = create_quote()
+#     for n ∈ 1:N
+#         push!(qa, :(Core.VecElement(x + y[$n].value)))
+#     end
+#     q
+# end
+# @generated function Base.:+(x::Vec{N,Core.VecElement{T}}, y::T) where {N,T<:Number}
+#     q, qa = create_quote()
+#     for n ∈ 1:N
+#         push!(qa, :(Core.VecElement(x[$n].value + y)))
+#     end
+#     q
+# end
+# @generated function Base.:+(x::Vec{N,Core.VecElement{T}}, y::Core.VecElement{T}) where {N,T<:Number}
+#     q, qa = create_quote()
+#     for n ∈ 1:N
+#         push!(qa, :(Core.VecElement(x[$n].value + y.value)))
+#     end
+#     q
+# end
+# @generated function Base.:-(x::Vec{N,Core.VecElement{T}}, y::Vec{N,Core.VecElement{T}}) where {N,T}
+#     q, qa = create_quote()
+#     for n ∈ 1:N
+#         push!(qa, :(Core.VecElement(x[$n].value - y[$n].value)))
+#     end
+#     q
+# end
+# @generated function Base.:-(x::T, y::Vec{N,Core.VecElement{T}}) where {N,T<:Number}
+#     q, qa = create_quote()
+#     for n ∈ 1:N
+#         push!(qa, :(Core.VecElement(x - y[$n].value)))
+#     end
+#     q
+# end
+# @generated function Base.:-(x::Core.VecElement{T}, y::Vec{N,Core.VecElement{T}}) where {N,T<:Number}
+#     q, qa = create_quote()
+#     for n ∈ 1:N
+#         push!(qa, :(Core.VecElement(x.value - y[$n].value)))
+#     end
+#     q
+# end
+# @generated function Base.:-(x::Vec{N,Core.VecElement{T}}, y::T) where {N,T<:Number}
+#     q, qa = create_quote()
+#     for n ∈ 1:N
+#         push!(qa, :(Core.VecElement(x[$n].value - y)))
+#     end
+#     q
+# end
+# @generated function Base.:-(x::Vec{N,Core.VecElement{T}}, y::Core.VecElement{T}) where {N,T<:Number}
+#     q, qa = create_quote()
+#     for n ∈ 1:N
+#         push!(qa, :(Core.VecElement(x[$n].value - y.value)))
+#     end
+#     q
+# end
+# @generated function Base.:*(x::Vec{N,Core.VecElement{T}}, y::Vec{N,Core.VecElement{T}}) where {N,T}
+#     q, qa = create_quote()
+#     for n ∈ 1:N
+#         push!(qa, :(Core.VecElement(x[$n].value * y[$n].value)))
+#     end
+#     q
+# end
+# @generated function Base.:*(x::T, y::Vec{N,Core.VecElement{T}}) where {N,T<:Number}
+#     q, qa = create_quote()
+#     for n ∈ 1:N
+#         push!(qa, :(Core.VecElement(x * y[$n].value)))
+#     end
+#     q
+# end
+# @generated function Base.:*(x::Core.VecElement{T}, y::Vec{N,Core.VecElement{T}}) where {N,T<:Number}
+#     q, qa = create_quote()
+#     for n ∈ 1:N
+#         push!(qa, :(Core.VecElement(x.value * y[$n].value)))
+#     end
+#     q
+# end
+# @generated function Base.:*(x::Vec{N,Core.VecElement{T}}, y::T) where {N,T<:Number}
+#     q, qa = create_quote()
+#     for n ∈ 1:N
+#         push!(qa, :(Core.VecElement(x[$n].value * y)))
+#     end
+#     q
+# end
+# @generated function Base.:*(x::Vec{N,Core.VecElement{T}}, y::Core.VecElement{T}) where {N,T<:Number}
+#     q, qa = create_quote()
+#     for n ∈ 1:N
+#         push!(qa, :(Core.VecElement(x[$n].value * y.value)))
+#     end
+#     q
+# end
+# @generated function Base.:/(x::Vec{N,Core.VecElement{T}}, y::Vec{N,Core.VecElement{T}}) where {N,T}
+#     q, qa = create_quote()
+#     for n ∈ 1:N
+#         push!(qa, :(Core.VecElement(x[$n].value / y[$n].value)))
+#     end
+#     q
+# end
+# @generated function Base.:/(x::T, y::Vec{N,Core.VecElement{T}}) where {N,T<:Number}
+#     q, qa = create_quote()
+#     for n ∈ 1:N
+#         push!(qa, :(Core.VecElement(x / y[$n].value)))
+#     end
+#     q
+# end
+# @generated function Base.:/(x::Core.VecElement{T}, y::Vec{N,Core.VecElement{T}}) where {N,T<:Number}
+#     q, qa = create_quote()
+#     for n ∈ 1:N
+#         push!(qa, :(Core.VecElement(x.value / y[$n].value)))
+#     end
+#     q
+# end
+# @generated function Base.:/(x::Vec{N,Core.VecElement{T}}, y::T) where {N,T<:Number}
+#     q, qa = create_quote()
+#     push!(qa, :(yi = 1/y))
+#     for n ∈ 1:N
+#         push!(qa, :(Core.VecElement(x[$n].value * yi)))
+#     end
+#     q
+# end
+# @generated function Base.:/(x::Vec{N,Core.VecElement{T}}, y::Core.VecElement{T}) where {N,T<:Number}
+#     q, qa = create_quote()
+#     push!(qa, :(yi = 1/y.value))
+#     for n ∈ 1:N
+#         push!(qa, :(Core.VecElement(x[$n].value * yi)))
+#     end
+#     q
+# end
+# @generated function Base.fma(x::Vec{N,Core.VecElement{T}}, y::Vec{N,Core.VecElement{T}}, z::Vec{N,Core.VecElement{T}}) where {N,T}
+#     q, qa = create_quote()
+#     for n ∈ 1:N
+#         push!(qa, :(Core.VecElement(x[$n].value * y[$n].value + z[$n].value)))
+#     end
+#     q
+# end
+# @generated function Base.fma(x::T, y::Vec{N,Core.VecElement{T}}, z::Vec{N,Core.VecElement{T}}) where {N,T}
+#     q, qa = create_quote()
+#     for n ∈ 1:N
+#         push!(qa, :(Core.VecElement(x * y[$n].value + z[$n].value)))
+#     end
+#     q
+# end
+# @generated function Base.fma(x::Core.VecElement{T}, y::Vec{N,Core.VecElement{T}}, z::Vec{N,Core.VecElement{T}}) where {N,T}
+#     q, qa = create_quote()
+#     for n ∈ 1:N
+#         push!(qa, :(Core.VecElement(x.value * y[$n].value + z[$n].value)))
+#     end
+#     q
+# end
+# @generated function Base.fma(x::Vec{N,Core.VecElement{T}}, y::T, z::Vec{N,Core.VecElement{T}}) where {N,T}
+#     q, qa = create_quote()
+#     for n ∈ 1:N
+#         push!(qa, :(Core.VecElement(x[$n].value * y + z[$n].value)))
+#     end
+#     q
+# end
+# @generated function Base.fma(x::Vec{N,Core.VecElement{T}}, y::Core.VecElement{T}, z::Vec{N,Core.VecElement{T}}) where {N,T}
+#     q, qa = create_quote()
+#     for n ∈ 1:N
+#         push!(qa, :(Core.VecElement(x[$n].value * y.value + z[$n].value)))
+#     end
+#     q
+# end
+# @generated function Base.fma(x::Vec{N,Core.VecElement{T}}, y::Vec{N,Core.VecElement{T}}, z::T) where {N,T}
+#     q, qa = create_quote()
+#     for n ∈ 1:N
+#         push!(qa, :(Core.VecElement(x[$n].value * y[$n].value + z)))
+#     end
+#     q
+# end
+# @generated function Base.fma(x::Vec{N,Core.VecElement{T}}, y::Vec{N,Core.VecElement{T}}, z::Core.VecElement{T}) where {N,T}
+#     q, qa = create_quote()
+#     for n ∈ 1:N
+#         push!(qa, :(Core.VecElement(x[$n].value * y[$n].value + z.value)))
 #     end
 #     q
 # end

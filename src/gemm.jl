@@ -46,17 +46,23 @@ and the optimal kernel is
 matrix multiplication.
 """
 function pick_kernel_size(::Type{Float64} = Float64) where T
+    # register_size == 32 ? (4,8,6) : (8,32,6)  #assumes size is either 32 or 64
     register_size == 32 ? (4,8,6) : (8,16,14)  #assumes size is either 32 or 64
 end
+pick_kernel_size(::Type{Core.VecElement{T}}) where T = pick_kernel_size(T)
 
 using Base: llvmcall
 
 # args are address, read/write, locality, cache type
-@inline function prefetch(address, ::Val{Locality} = Val(1), ::Val{RorW} = Val(0)) where {Locality, RorW}
-    llvmcall(("declare void @llvm.prefetch(i8* , i32 , i32 , i32 )",
-    """%addr = inttoptr i64 %0 to i8*
+@generated function prefetch(address, ::Val{Locality} = Val(1), ::Val{RorW} = Val(0)) where {Locality, RorW}
+    prefetch_call_string = """%addr = inttoptr i64 %0 to i8*
     call void @llvm.prefetch(i8* %addr, i32 $RorW, i32 $Locality, i32 1)
-    ret void"""), Cvoid, Tuple{Ptr{Cvoid}}, address)
+    ret void"""
+    quote
+        $(Expr(:meta, :inline))
+        llvmcall(("declare void @llvm.prefetch(i8* , i32 , i32 , i32 )",
+        $prefetch_call_string), Cvoid, Tuple{Ptr{Cvoid}}, address)
+    end
 end
 
 @generated function jmul!(D::AbstractMatrix{T}, A::AbstractMatrix{T}, X::AbstractMatrix{T}) where T
@@ -172,7 +178,7 @@ function store_block(V::Type{Vec{L,T}}, row_loads, rows, cols, M, D::Symbol = :D
     q = quote end
     st = sizeof(T)
     for c ∈ 1:cols, r ∈ 1:row_loads
-        push!(q.args, :( vstore!($D + $((r-1)*L*st + M*(c - 1)*st ) + rc*$(rows*st) + cc*$(cols*M*st), $(Symbol(D,:_,r,:_,c)) ) ) )
+        push!(q.args, :( vstore( $(Symbol(D,:_,r,:_,c)), $D + $((r-1)*L*st + M*(c - 1)*st ) + rc*$(rows*st) + cc*$(cols*M*st)) ) )
         # prefetch() && push!(q.args, :(prefetch($(Symbol(:p, A,:_,r)) + $(M*st) , Val(3), Val(1))))
     end
     q
@@ -181,7 +187,7 @@ function store_block(V::Type{Vec{L,T}}, row_loads, rows, cols, M, rc::Int, cc::I
     q = quote end
     st = sizeof(T)
     for c ∈ 1:cols, r ∈ 1:row_loads
-        push!(q.args, :( vstore!($D + $((r-1)*L*st + M*(c - 1)*st + rc*rows*st + cc*cols*M*st), $(Symbol(D,:_,r,:_,c)) ) ) )
+        push!(q.args, :( vstore($(Symbol(D,:_,r,:_,c)), $D + $((r-1)*L*st + M*(c - 1)*st + rc*rows*st + cc*cols*M*st)) ) )
         # prefetch() && push!(q.args, :(prefetch($(Symbol(:p, A,:_,r)) + $(M*st) , Val(3), Val(1))))
     end
     q
@@ -192,12 +198,12 @@ function initialize_block(V::Type{Vec{L,T}}, row_loads, rows, cols, M, N,
     st = sizeof(T)
     # prefetch() && push!(q.args, :(prefetch($(pX) + $(c*N) + cc*$(cols*N), Val(3), Val(0))))
     for r ∈ 1:row_loads
-        push!(q.args, :( $(Symbol(A,:_,r)) = unsafe_load($(A) + $((r-1)*L*st) + rc*$(rows*st) )) )
+        push!(q.args, :( $(Symbol(A,:_,r)) = vload($V, $(A) + $((r-1)*L*st) + rc*$(rows*st) )) )
         # prefetch() && push!(q.args, :(prefetch($(A) + $((r-1)*L*st-M*st + 2*M*st) + rc*$(rows*st), Val(3), Val(0))))
         # push!(q.args, :( @show $(Symbol(A,:_,r)) ))
     end
     for c ∈ 1:cols
-        push!(q.args, :( $(Symbol(X,:_,c)) = $X[1,$c + cc*$cols]) )
+        push!(q.args, :( $(Symbol(X,:_,c)) = $V($X[1,$c + cc*$cols])) )
         # push!(q.args, :( $(Symbol(X,:_,c)) = ($V)(($X)[1,$c + cc*$cols]) ) )
         # push!(q.args, :( @show $(Symbol(X,:_,c)) ))
         for r ∈ 1:row_loads
@@ -213,12 +219,12 @@ function initialize_block(V::Type{Vec{L,T}}, row_loads, rows, cols, M, N, rc::In
     st = sizeof(T)
     # prefetch() && push!(q.args, :(prefetch($(pX) + $(c*N) + cc*$(cols*N), Val(3), Val(0))))
     for r ∈ 1:row_loads
-        push!(q.args, :( $(Symbol(A,:_,r)) = unsafe_load($(A) + $((r-1)*L*st + rc*rows*st) )) )
+        push!(q.args, :( $(Symbol(A,:_,r)) = vload($V, $(A) + $((r-1)*L*st + rc*rows*st) )) )
         # prefetch() && push!(q.args, :(prefetch($(A) + $((r-1)*L*st-M*st + 2*M*st) + rc*$(rows*st), Val(3), Val(0))))
         # push!(q.args, :( @show $(Symbol(A,:_,r)) ))
     end
     for c ∈ 1:cols
-        push!(q.args, :( @inbounds $(Symbol(X,:_,c)) = $X[1,$(c + cc*cols)]) )
+        push!(q.args, :( @inbounds $(Symbol(X,:_,c)) = $V($X[1,$(c + cc*cols)]) ))
         # push!(q.args, :( @inbounds $(Symbol(X,:_,c)) = ($V)(($X)[1,$(c + cc*cols)]) ) )
         # push!(q.args, :( @show $(Symbol(X,:_,c)) ))
         for r ∈ 1:row_loads
@@ -235,13 +241,13 @@ function fma_increment_block(V::Type{Vec{L,T}}, row_loads, rows, cols, M, N,
     # prefetch() && push!(q.args, :(prefetch($(pX) + $(c*N) + cc*$(cols*N), Val(3), Val(0))))
     for r ∈ 1:row_loads
         push!(q.args, :( $(Symbol(:p, A,:_,r)) = $(A) + $((r-1)*L*st-M*st) + rc*$(rows*st) + n*$(M*st) ))
-        push!(q.args, :( $(Symbol(A,:_,r)) = unsafe_load($(Symbol(:p, A,:_,r)) )) )
+        push!(q.args, :( $(Symbol(A,:_,r)) = vload($V, $(Symbol(:p, A,:_,r)) )) )
         # prefetch() && push!(q.args, :(prefetch($(Symbol(:p, A,:_,r)) + $(M*st) , Val(3), Val(0))))
         # + $(r*vector_length*st-M*st) + rc*$(rows*st) + n*$(M*st) )) )
         # push!(q.args, :( @show $(Symbol(A,:_,r)) ))
     end
     for c ∈ 1:cols
-        push!(q.args, :( $(Symbol(X,:_,c)) = $X[n,$c + cc*$cols]) )
+        push!(q.args, :( $(Symbol(X,:_,c)) = $V($X[n,$c + cc*$cols])) )
         # push!(q.args, :( $(Symbol(X,:_,c)) = ($V)($(X)[n,$c + cc*$cols]) ) )
         # push!(q.args, :( @show $(Symbol(X,:_,c)) ))
         for r ∈ 1:row_loads
@@ -259,13 +265,13 @@ function fma_increment_block(V::Type{Vec{L,T}}, row_loads, rows, cols, M, N, rc:
     # prefetch() && push!(q.args, :(prefetch($(pX) + $(c*N) + cc*$(cols*N), Val(3), Val(0))))
     for r ∈ 1:row_loads
         push!(q.args, :( $(Symbol(:p, A,:_,r)) = $(A) + $((r-1)*L*st-M*st + rc*rows*st + n*M*st) ))
-        push!(q.args, :( $(Symbol(A,:_,r)) = unsafe_load($(Symbol(:p, A,:_,r)) )) )
+        push!(q.args, :( $(Symbol(A,:_,r)) = vload($V, $(Symbol(:p, A,:_,r)) )) )
         # prefetch() && push!(q.args, :(prefetch($(Symbol(:p, A,:_,r)) + $(M*st) , Val(3), Val(0))))
         # + $(r*vector_length*st-M*st) + rc*$(rows*st) + n*$(M*st) )) )
         # push!(q.args, :( @show $(Symbol(A,:_,r)) ))
     end
     for c ∈ 1:cols
-        push!(q.args, :( @inbounds $(Symbol(X,:_,c)) = $X[$n,$(c + cc*cols)]) )
+        push!(q.args, :( @inbounds $(Symbol(X,:_,c)) = $V($X[$n,$(c + cc*cols)])) )
         # push!(q.args, :( @inbounds $(Symbol(X,:_,c)) = ($V)($(X)[$n,$(c + cc*cols)]) ) )
         # push!(q.args, :( @show $(Symbol(X,:_,c)) ))
         for r ∈ 1:row_loads
@@ -276,6 +282,29 @@ function fma_increment_block(V::Type{Vec{L,T}}, row_loads, rows, cols, M, N, rc:
     q
 end
 
+
+@generated function jmulkernel!(D::MMatrix{M,P,T}, A::MMatrix{M,N,T}, X::MMatrix{N,P,T}) where {T,M,N,P}
+
+    vector_length, rows, cols = pick_kernel_size(T) #VL = VecLength
+    V = Vec{vector_length, T}
+    row_loads = rows ÷ vector_length
+    q = quote
+        # pD = pointer(D)
+        pA = pointer(A)
+        pD = pointer(D)
+        @inbounds begin
+            $(initialize_block(V, row_loads, rows, cols, M, N, 0, 0, :pD, :pA))
+        end
+        D
+    end
+    qa = q.args[6].args[3].args
+    for n ∈ 2:N
+        push!(qa, fma_increment_block(V, row_loads, rows, cols, M, N, 0,0,n, :pD, :pA))
+    end
+    push!(qa, store_block(V, row_loads, rows, cols, M, 0, 0, :pD))
+
+    q
+end
 
 # Was deprecated in 0.7
 # @inline sub2ind((M,N)::Tuple{Int,Int}, i, j) = i + (j-1)*M
@@ -363,10 +392,10 @@ The prefetch val options determine the prefetch lag. That is, how far in advance
 
 
     q = quote
-        pD = Base.unsafe_convert(Ptr{$V}, pointer(D))
-        pA = Base.unsafe_convert(Ptr{$V}, pointer(A))
-        pX = Base.unsafe_convert(Ptr{$V}, pointer(X))
-        # pD = Base.unsafe_convert(Ptr{$V}, pointer(D))
+        # pD = pointer(D)
+        pA = pointer(A)
+        pX = pointer(X)
+        pD = pointer(D)
         @inbounds begin
             for cc ∈ 0:$(col_chunks-1), rc ∈ 0:$(row_chunks-1) #row_chunks total
                 $prefetch_load_Xi
@@ -404,11 +433,124 @@ The prefetch val options determine the prefetch lag. That is, how far in advance
 
     q
 end
-
-
-
-
-
-# D = randn(32*20, 36*20);
-# A = randn(32*20, 32*25);
-# X = randn(32*25, 36*20);
+#
+# struct UnsafeArray{T,N}
+#     pointer::Ptr{T}
+#     UnsafeArray(p::Ptr{T},::Val{N}) where {T,N} = new{T,N}(p)
+# end
+#
+# Base.getindex(x::UnsafeArray,i) = unsafe_load(x.pointer, i)
+# Base.getindex(x::UnsafeArray{T,N},i,j) where {T,N} = unsafe_load(x.pointer, i+(j-1)*N)
+# #
+# @generated function jmul!(pD::Ptr{T}, pA::Ptr{T}, pX::Ptr{T},::Val{M},::Val{N},::Val{P},
+#     ::Val{Aprefetch_freq} = Val(7), ::Val{Xprefetch_freq} = Val(7),
+#     ::Val{A_loc} = Val(3), ::Val{X_loc} = Val(3), ::Val{D_loc} = Val(3)) where {T,M,N,P,Aprefetch_freq,Xprefetch_freq,A_loc,X_loc,D_loc}#,Aprefetch_freq2,Xprefetch_freq2,A_loc2,X_loc2}
+#     # ,::Val{Aprefetch_freq2} = Val(8), ::Val{Xprefetch_freq2} = Val(8),
+#     # ::Val{A_loc2} = Val(2), ::Val{X_loc2} = Val(2)) where {T,M,N,P,Aprefetch_freq,Xprefetch_freq,A_loc,X_loc,D_loc,Aprefetch_freq2,Xprefetch_freq2,A_loc2,X_loc2}
+#
+#     # Preftech freq actually very architecture dependendent!!!
+#     # Going to have to pick that somehow, too.
+#     # For now, if it isn't AVX512, we'll assume it should be much less aggressive.
+#
+# # @generated function smul!(D::SizedArray{Tuple{M,P},T}, A::SizedArray{Tuple{M,N},T}, X::SizedArray{Tuple{N,P},T}) where {T,M,N,P}
+#     # t_size = sizeof(T)
+#     # cacheline_size = 64 ÷ t_size
+#     # N = avx512 ? 64 ÷ t_size : 32 ÷ t_size
+#     vector_length, rows, cols = pick_kernel_size(T) #VL = VecLength
+#
+#     if vector_length == 4
+#         Aprefetch_freq *= 8
+#         Xprefetch_freq *= 8
+#     end
+#
+#
+#     row_chunks, row_remainder = divrem(M, rows)
+#     col_chunks, col_remainder = divrem(P, cols)
+#
+#     row_loads = rows ÷ vector_length
+#     # col_loads = cols ÷
+#     V = Vec{vector_length, T}
+#
+#     init_block = initialize_block(V, row_loads, rows, cols, M, N, :pD, :pA)#, :pX)
+#     fma_block = fma_increment_block(V, row_loads, rows, cols, M, N, :pD, :pA)#, :pX)
+#     store = store_block(V, row_loads, rows, cols, M, :pD)
+#         # init_block = initialize_block(V, row_loads, rows, cols)#, :pD, :pA, :pX)
+#         # fma_block = fma_increment_block(V, row_loads, rows, cols, M)#, :pD, :pA, :pX)
+#         # store = store_block(V, row_loads, rows, cols, M)#, :pD)
+#
+#     cache_length = 64 ÷ sizeof(T)
+#     cache_loads = rows ÷ cache_length
+#     # prefetch_freq = 8
+#     maxrc, maxcc = row_chunks-1, col_chunks-1
+#     prefetch_store = prefetch_storage(V, cache_length, cache_loads, rows, cols, M, maxrc, maxcc, D_loc)
+#
+#
+#     prefetch_load_A = prefetch_load_Aq(V, cache_length, cache_loads, rows, cols, M,N, maxrc, Aprefetch_freq, A_loc)
+#     prefetch_load_Ai = prefetch_load_Aiq(V, cache_length, cache_loads, rows, cols, M,N, maxrc, Aprefetch_freq, A_loc)
+#     prefetch_load_X = prefetch_load_Xq(V, cache_length, rows, cols, N, maxrc, maxcc, Xprefetch_freq, X_loc)
+#     prefetch_load_Xi = prefetch_load_Xiq(V, cache_length, rows, cols, N, maxrc, maxcc, Xprefetch_freq, X_loc)
+#
+#
+#     # prefetch_load_A2 = prefetch_load_Aq(V, cache_length, cache_loads, rows, cols, M,N, maxrc, Aprefetch_freq2, A_loc2)
+#     # prefetch_load_Ai2 = prefetch_load_Aiq(V, cache_length, cache_loads, rows, cols, M,N, maxrc, Aprefetch_freq2, A_loc2)
+#     # prefetch_load_X2 = prefetch_load_Xq(V, cache_length, rows, cols, N, maxrc, maxcc, Xprefetch_freq2, X_loc2)
+#     # prefetch_load_Xi2 = prefetch_load_Xiq(V, cache_length, rows, cols, N, maxrc, maxcc, Xprefetch_freq2, X_loc2)
+#
+#     # purpose of this is to break iteration of N up into these chunks, to prefetch X vectors.
+#     Nd, Nr = divrem(N-1, cache_length)
+#     Nr += 1
+#     if Nr < cache_length ÷ 3 && Nd > 0
+#         Nr += cache_length
+#         Nd -= 1
+#     end
+#
+#
+#     q = quote
+#         # pD = Base.unsafe_convert(Ptr{$V}, pointer(D))
+#         # pA = Base.unsafe_convert(Ptr{$V}, pointer(A))
+#         # pX = Base.unsafe_convert(Ptr{$V}, pointer(X))
+#         X = UnsafeArray(pX,Val{$N}())
+#         # pD = Base.unsafe_convert(Ptr{$V}, pointer(D))
+#         @inbounds begin
+#             for cc ∈ 0:$(col_chunks-1), rc ∈ 0:$(row_chunks-1) #row_chunks total
+#                 $prefetch_load_Xi
+#                 $prefetch_load_Ai
+#                 # $prefetch_load_Xi2
+#                 # $prefetch_load_Ai2
+#                 $init_block
+#                 for n ∈ 2:$Nr
+#                     $prefetch_load_A
+#                     # $prefetch_load_A2
+#                     $fma_block
+#                 end
+#                 for nd ∈ 1:$Nd
+#                     pxn = (nd-1)*$cache_length+$Nr
+#                     $prefetch_load_X
+#                     # $prefetch_load_X2
+#                     for n ∈ pxn+1:pxn+$cache_length
+#                         $prefetch_load_A
+#                         # $prefetch_load_A2
+#                         $fma_block
+#                     end
+#                 end
+#                 $store
+#                 $prefetch_store
+#             end
+#         end
+#         # D
+#     end
+#     # push!(q.args[6].args[3],
+#     # quote
+#     #     for cc ∈ $(P-col_remainder+1:P), rc ∈ $(M-row_remainder+1:M)# rest, should do some remaining cache line size first
+#     #
+#     #     end
+#     # end)
+#
+#     q
+# end
+#
+#
+#
+# # D = randn(32*20, 36*20);
+# # A = randn(32*20, 32*25);
+# # X = randn(32*25, 36*20);
