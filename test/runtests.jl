@@ -7,10 +7,38 @@
 using OhMyREPL, jBLAS, BenchmarkTools, LinearAlgebra
 
 
+fortdir = "/home/chriselrod/Documents/progwork/fortran";
+const gkernelpath32only = joinpath(fortdir, "libkernels32only.so")
+function gfortran!(D, A, X)
+    ccall((:__kernels_MOD_mulkernel, gkernelpath32only), Cvoid,
+        (Ptr{Float64},Ptr{Float64},Ptr{Float64}),D,A,X)
+    D
+end
+
 A16_32 = mrandn(16,32);
 B32_14 = mrandn(32,14);
 C16_14 = mrandn(16,14);
+# jmul!(C16_14, A16_32, B32_14)
 @benchmark jmul!($C16_14, $A16_32, $B32_14)
+@benchmark jBLAS.jmulkernel!($C16_14, $A16_32, $B32_14)
+@benchmark gfortran!($C16_14, $A16_32, $B32_14)
+# Awesome performance of simple for loop:
+# julia> @benchmark jmul!($C16_14, $A16_32, $B32_14)
+# BenchmarkTools.Trial:
+#   memory estimate:  0 bytes
+#   allocs estimate:  0
+#   --------------
+#   minimum time:     127.921 ns (0.00% GC)
+#   median time:      128.088 ns (0.00% GC)
+#   mean time:        134.569 ns (0.00% GC)
+#   maximum time:     188.854 ns (0.00% GC)
+#   --------------
+#   samples:          10000
+#   evals/sample:     891
+
+
+C16_14v2 = mrandn(16,14);
+C16_14v3 = mrandn(16,14);
 
 
 A32_32 = mrandn(32,32);
@@ -27,6 +55,54 @@ jmul!(C128_126, A128_128, B128_126)
 mul!(C128_126, A128_128, B128_126)
 @benchmark jmul!($C128_126, $A128_128, $B128_126)
 @benchmark mul!($C128_126, $A128_128, $B128_126)
+
+A800_900 = mrandn(16*50, 900);
+B900_840 = mrandn(900,14*60);
+C800_840 = mrandn(16*50,14*60);
+jmul!(C800_840, A800_900, B900_840)
+mul!(C800_840, A800_900, B900_840)
+@benchmark jmul!($C800_840, $A800_900, $B900_840)
+@benchmark mul!($C800_840, $A800_900, $B900_840)
+
+
+
+
+
+
+
+
+
+
+
+
+using OhMyREPL, jBLAS, BenchmarkTools, LinearAlgebra
+
+
+A32_32 = mrandn(32,32);
+B32_6 = mrandn(32,6);
+C32_6 = mrandn(32,6);
+jmul!(C32_6, A32_32, B32_6)
+mul!(C32_6, A32_32, B32_6)
+@benchmark jmul!($C32_6, $A32_32, $B32_6)
+
+# C16_14v2 = mrandn(16,14);
+# C16_14v3 = mrandn(16,14);
+
+# A32_32 = mrandn(32,32);
+B32_24 = mrandn(32,24);
+C32_24 = mrandn(32,24);
+@benchmark jmul!($C32_24, $A32_32, $B32_24)
+
+
+BLAS.set_num_threads(1)
+A128_128 = mrandn(128,128);
+B128_126 = mrandn(128,126);
+C128_126 = mrandn(128,126);
+jmul!(C128_126, A128_128, B128_126)
+mul!(C128_126, A128_128, B128_126)
+@benchmark jmul!($C128_126, $A128_128, $B128_126)
+@benchmark mul!($C128_126, $A128_128, $B128_126)
+
 
 A800_900 = mrandn(16*50, 900);
 B900_840 = mrandn(900,14*60);
