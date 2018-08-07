@@ -1,55 +1,147 @@
 
 
-
-
-
-const register_size = CpuId.simdbytes()
-const register_count = ifelse(register_size == 64, 32, 16)
-
 """
-This function should eventually be used to pick the kernel sizes.
-However, right now I think the math is wrong.
-Eg,
-1) it doesn't realize that 16x14 works without spilling for AVX512, instead saying 10 is the most columns that fit with 16 rows
-2) It picks sizes that are much too skiny, like 32x6.
-Once this is improved, we can update pick_kernel_size to calculate the best size using the same logic as this function
-(without storing all results in a matrix, just tracking the best)
+Given matrices of size M, N, and P...
+This matrix assumes 3 cache levels. This means it is not especially portable, beyond x86_64.
+Level 1 and 2 is assumed to be local to each core, while level 3 is assumed shared.
+
+How do I want it to work? Each level should divide well into the next. Means for one thing
+I probably want to iterate over cache_size backwards?
+
+Goal is to minimize actual data movement that goes on.
+D (+)= A * X
+Looking at the extreme of calculating a single kernel from D in full at a time,
+we see that it
+a) Minimizes loading and unloading D from registers.
+    1) Does this maximize kernel performance? Kernels are then (m x N) * (N x p).
+b) 
+
+Should add support for how many copies of each of the matrices we have, so that we can perform calculations such as
+    D = A*X + C
+    or
+    D = A*(X + C)
+in one step, without as much un/reloading of memory.
 """
-function kernel_size_summary(avx512, ::Type{T} = Float64) where T
-    register_size, register_count = avx512 ? (64, 32) : (32, 16)
-    t_size = sizeof(T)
-    num_per_register = register_size ÷ t_size
-    max_total = num_per_register * register_count
-    cache_line = 64 ÷ t_size
-    num_cache_lines = cld(max_total, cache_line)
-    summary = Matrix{Float64}(undef, 5, num_cache_lines)
-    for num_row_cachelines ∈ 1:num_cache_lines
-        num_rows = num_row_cachelines * cache_line
-        a_loads = cld(num_rows, num_per_register)
-        num_cols = (register_count - a_loads) ÷ (1+a_loads)
-        summary[:, num_row_cachelines] .= (num_rows, num_cols, num_rows * num_cols, num_cols + a_loads, num_rows * num_cols / (num_cols + a_loads))
-        if num_cols == 0
-            println("A * X = D; nrow(D), ncol(D), length(D), NumRegeristersLoaded")
-            return summary[:, 1:num_row_cachelines]
+function blocking_structure(M, N, P, ::Type{T} = Float64; cache_size::NTuple{N,Int} = CACHE_SIZE, D_count = 1, A_count = 1, X_count = 1) where {T,N}
+    total_elements = M*N*D_count + N*P*A_count + M*P*X_count
+    L1, L2, L3 = cache_size[1:3] .÷ sizeof(T)
+    if L1 > total_elements
+        return ((M,N,P),(M,N,P),(M,N,P))
+    end
+
+    m_1, p_1 = pick_kernel_size(T, D_count = D_count, A_count = A_count, X_count = X_count)
+    Dmp_1 = m_1 * p_1
+    
+    # for cache ∈ cache_size
+    # for i ∈ N:-1:1
+    # For first cache, we do not block, but stretch "n" as large as possible for a
+    # single m x n * n x p kernel.
+    # num_elements = L1 #÷ sizeofT
+    # if num_elements > Dmp_1
+    # num_remaining = L1 - Dmp_1
+    n_1 = L1 - Dmp_1 ÷ (m_1 + p_1)
+
+    # I need to consider the case where
+    # m_1 or p_1 can be some multiple of themselves due to N being too small.
+    # n_2 = n_1 = min(N, n_1)
+    if n_1 > N
+        n_2 = n_1 = N
+        m_1, p_1 = divide_into_rough_square(L1, M, P, n_1, m_1, p_1)#, D_count = D_count, A_count = A_count, X_count = X_count)
+    else
+        n_2 = n_1
+    end
+
+    # else # currently not bothering to handle the "else".
+
+    # end
+    # num_elements = cache_size[i+1] ÷ sizeofT
+    # 0 = m^2 + 2m*n_2 - L2
+
+    if L2 > total_elements
+        return ((m_1, n_1, p_1), (M, N, P), (M, N, P))
+    end
+
+    # Try to upper bound size of m_2, p_2
+    # Consider safety factors, for other things (instructions?) in this cache?
+    m_2, p_2 = divide_into_rough_square(L2, M, P, n_2, m_1, p_1)#, D_count = D_count, A_count = A_count, X_count = X_count)
+    
+    if L3 > total_elements
+        return ((m_1, n_1, p_1), (m_2, n_2, p_2), (M, N, P))
+    end
+
+    Dmp_2 = m_2 * p_2
+    n_3 = L3 - Dmp_2 ÷ (m_2 + p_2)
+    if n_3 > N
+        m_3, p_3 = divide_into_rough_square(L3, M, P, n_3, m_2, p_2)#, D_count = D_count, A_count = A_count, X_count = X_count)
+    else
+        m_3, p_3 = m_2, p_2
+    end
+
+    Base.Cartesian.@ntuple 3 i -> (m_i, n_i, p_i)
+
+end
+
+function divide_into_rough_square(L, M, P, n, mbase, pbase)
+    L_upper_bound = floor(Int, sqrt(abs2(n) + L) - n)
+    m_2 = L_upper_bound ÷ mbase * mbase
+    if m_2 > M
+        m_2 = M
+        p_2 = min(P, (L - m_2*n) ÷ (m_2 + n) ) 
+    else
+        p_2 = L_upper_bound ÷ pbase * pbase
+        if p_2 > P
+            p_2 = P
+            m_2 = min(M, (L - p_2*n) ÷ (p_2 + n) ) 
         end
     end
-    println("A * X = D; nrow(D), ncol(D), length(D), NumRegeristersLoaded")
-    summary
+    m_2, p_2
 end
 
+
+# function pick_block_pattern_increment_first_only(M,N,P,m,n,p,num_elements)
+#     mnext = 1
+#     mproposal = 2
+# end
+# # Eh, forget this nonsense. Just use quadratic form, starting with the assumption of equality,
+# # and then use limits on M, N, and being a multiple of prior m and p
+# # to solve for the actual values you propose.
+# function pick_block_pattern(M,N,P,m,n,p,num_elements)
+#     if p > P
+#         return pick_block_pattern_increment_first_only(M,N,P,m,n,p,num_elements)
+#     elseif m > M
+#         return pick_block_pattern_increment_first_only(P,N,M,p,n,m,num_elements)
+#     end
+#     mprop,pprop = min(m, M) > min(p, P) ? (1,2) : (2,1)
+#     else
+#         return 1, 1
+#     end
+#     mnext, pnext = 1, 1
+#     while  mprop * pprop + mprop * n + n * pprop < num_elements
+#         mnext, pnext = mprop, prop
+#         mprop,pprop = min(m*mprop, M) > min(p*prop, P) ? (min(m, M),min(2p,P)) : (min(2m, M), min(p, P))
+#     end
+#     mnext, pnext
+# end
+
+
+
 """
-Returns number of elements per register,
-and the number of rows and columns of the kernel.
-Ie, 8, 16, 14 means that 8 elements fit per register,
-and the optimal kernel is
-16x14 = 16xN * Nx14
-matrix multiplication.
+Need to come up with a good way to implement this!!!
+56-ish works well on Ryzen (1950x)
+7-ish works well on Skylake-X (7900x)
+
+But this is way more complicated. My whole prefetching strategy probably needs to be totally reworked. Need to study the behavior of memory and matmul implementations, I guess.
+On Haswell, 10 works best for smallish matrices, and then takes a dramatic performance hit for 11 or greater. For larger matrices, performance improves.
+A better model is probably more aware of the sizes of the different caches.
+
+I think one advantage of following a recursive strategy is that you
+may be able to structure it in a way so that there's a clear pattern / structure for prefetching blocks into different cache levels.
+Moreover, recursive strategies are often called "cache oblivious", because they're indepdent of the cache sizes for a particular architecture. That is probably the most reasonable approach.
 """
-function pick_kernel_size(::Type{Float64} = Float64) where T
-    # register_size == 32 ? (4,8,6) : (8,32,6)  #assumes size is either 32 or 64
-    register_size == 32 ? (4,8,6) : (8,16,14)  #assumes size is either 32 or 64
+function pick_prefetch_strategy()
+
+
 end
-pick_kernel_size(::Type{Core.VecElement{T}}) where T = pick_kernel_size(T)
 
 using Base: llvmcall
 
@@ -100,6 +192,12 @@ function prefetch_storage(V::Type{Vec{L,T}}, CL, cache_loads, rows, cols, M, max
         end
     end
 end
+
+"""
+Could introducing branches in these prefetch statements slow things down?
+What are the consequences of these?
+Should the new row prefetch be reformulated into an ifelse statement?
+"""
 function prefetch_load_Aiq(V::Type{Vec{L,T}}, CL, cache_loads, rows, cols, M,N, maxrc,
                             prefetch_freq, loc = 2, A = :pA) where {L,T}
     q1 = quote end
@@ -327,6 +425,8 @@ jmul!(D, A, X, Val(Aprefetch), Val(Xprefetch))
 
 The prefetch val options determine the prefetch lag. That is, how far in advance will a prefetch instruction be sent?
 
+Prefetching needs serious work on Haswell processors.
+Likely, on every intel non-avx512 processors.
 """
 @generated function jmul!(D::MMatrix{M,P,T}, A::MMatrix{M,N,T}, X::MMatrix{N,P,T},
     ::Val{Aprefetch_freq} = Val(7), ::Val{Xprefetch_freq} = Val(7),
@@ -344,7 +444,7 @@ The prefetch val options determine the prefetch lag. That is, how far in advance
     # N = avx512 ? 64 ÷ t_size : 32 ÷ t_size
     vector_length, rows, cols = pick_kernel_size(T) #VL = VecLength
 
-    if vector_length == 4
+    if architecture == :Ryzen #Should make 
         Aprefetch_freq *= 8
         Xprefetch_freq *= 8
     end
