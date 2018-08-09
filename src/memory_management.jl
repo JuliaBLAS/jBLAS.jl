@@ -12,8 +12,6 @@ using Base: llvmcall
     end
 end
 
-
-
 """
 Given matrices of size M, N, and P...
 This matrix assumes 3 cache levels. This means it is not especially portable, beyond x86_64.
@@ -28,7 +26,7 @@ Looking at the extreme of calculating a single kernel from D in full at a time,
 we see that it
 a) Minimizes loading and unloading D from registers.
     1) Does this maximize kernel performance? Kernels are then (m x N) * (N x p).
-b) 
+b)
 
 Should add support for how many copies of each of the matrices we have, so that we can perform calculations such as
     D = A*X + C
@@ -36,24 +34,18 @@ Should add support for how many copies of each of the matrices we have, so that 
     D = A*(X + C)
 in one step, without as much un/reloading of memory.
 """
-function blocking_structure(M, N, P, ::Type{T} = Float64; cache_size::NTuple{N,Int} = CACHE_SIZE, D_count = 1, A_count = 1, X_count = 1) where {T,N}
+function blocking_structure(M, N, P, ::Type{T} = Float64; cache_size::NTuple{3,Int} = CACHE_SIZE, D_count = 1, A_count = 1, X_count = 1) where T
     total_elements = M*N*D_count + N*P*A_count + M*P*X_count
-    L1, L2, L3 = cache_size[1:3] .÷ sizeof(T)
+    L1, L2, L3 = cache_size .÷ sizeof(T)
     if L1 > total_elements
-        return ((M,N,P),(M,N,P),(M,N,P))
+        return ((M,N,P),(M,N,P),(M,N,P)),0
     end
 
-    m_1, p_1 = pick_kernel_size(T, D_count = D_count, A_count = A_count, X_count = X_count)
+    epr, m_1, p_1 = pick_kernel_size(T, D_count = D_count, A_count = A_count, X_count = X_count)
+    # @show m_1, p_1, L1, L2, L3
     Dmp_1 = m_1 * p_1
-    
-    # for cache ∈ cache_size
-    # for i ∈ N:-1:1
-    # For first cache, we do not block, but stretch "n" as large as possible for a
-    # single m x n * n x p kernel.
-    # num_elements = L1 #÷ sizeofT
-    # if num_elements > Dmp_1
-    # num_remaining = L1 - Dmp_1
-    n_1 = L1 - Dmp_1 ÷ (m_1 + p_1)
+
+    n_1 = (L1 - Dmp_1) ÷ (m_1 + p_1)
 
     # I need to consider the case where
     # m_1 or p_1 can be some multiple of themselves due to N being too small.
@@ -72,26 +64,26 @@ function blocking_structure(M, N, P, ::Type{T} = Float64; cache_size::NTuple{N,I
     # 0 = m^2 + 2m*n_2 - L2
 
     if L2 > total_elements
-        return ((m_1, n_1, p_1), (M, N, P), (M, N, P))
+        return ((m_1, n_1, p_1), (M, N, P), (M, N, P)),1
     end
 
     # Try to upper bound size of m_2, p_2
     # Consider safety factors, for other things (instructions?) in this cache?
     m_2, p_2 = divide_into_rough_square(L2, M, P, n_2, m_1, p_1)#, D_count = D_count, A_count = A_count, X_count = X_count)
-    
+
     if L3 > total_elements
-        return ((m_1, n_1, p_1), (m_2, n_2, p_2), (M, N, P))
+        return ((m_1, n_1, p_1), (m_2, n_2, p_2), (M, N, P)),2
     end
 
     Dmp_2 = m_2 * p_2
-    n_3 = L3 - Dmp_2 ÷ (m_2 + p_2)
+    n_3 = (L3 - Dmp_2) ÷ (m_2 + p_2)
     if n_3 > N
         m_3, p_3 = divide_into_rough_square(L3, M, P, n_3, m_2, p_2)#, D_count = D_count, A_count = A_count, X_count = X_count)
     else
         m_3, p_3 = m_2, p_2
     end
 
-    Base.Cartesian.@ntuple 3 i -> (m_i, n_i, p_i)
+    (Base.Cartesian.@ntuple 3 i -> (m_i, n_i, p_i)),3
 
 end
 
@@ -100,12 +92,12 @@ function divide_into_rough_square(L, M, P, n, mbase, pbase)
     m_2 = L_upper_bound ÷ mbase * mbase
     if m_2 > M
         m_2 = M
-        p_2 = min(P, (L - m_2*n) ÷ (m_2 + n) ) 
+        p_2 = min(P, (L - m_2*n) ÷ (m_2 + n) )
     else
         p_2 = L_upper_bound ÷ pbase * pbase
         if p_2 > P
             p_2 = P
-            m_2 = min(M, (L - p_2*n) ÷ (p_2 + n) ) 
+            m_2 = min(M, (L - p_2*n) ÷ (p_2 + n) )
         end
     end
     m_2, p_2

@@ -12,18 +12,15 @@ is one of memory movement? That is, our square blocks should try to balance
 the number of rows and columns...
 ...what is the impact on memory movement of different shapes?
 """
-function kernel_size_summary(avx512, ::Type{T} = Float64) where T
-    register_size, register_count = avx512 ? (64, 32) : (32, 16)
-    t_size = sizeof(T)
-    num_per_register = register_size ÷ t_size
-    max_total = num_per_register * register_count
-    cache_line = CACHELINE_SIZE ÷ t_size
+function kernel_size_summary(::Type{T} = Float64) where T
+    T_size = sizeof(T)
+    num_per_register = REGISTER_SIZE ÷ T_size
+    cache_line = CACHELINE_SIZE ÷ T_size
+    max_total = num_per_register * REGISTER_COUNT
     num_cache_lines = cld(max_total, cache_line)
     summary = Matrix{Float64}(undef, 5, num_cache_lines)
     for num_row_cachelines ∈ 1:num_cache_lines
-        num_rows = num_row_cachelines * cache_line
-        a_loads = cld(num_rows, num_per_register)
-        num_cols = (register_count - a_loads - 2) ÷ a_loads
+        num_cols, a_loads = num_cols_and_loads(num_rows, num_per_register)
         summary[:, num_row_cachelines] .= (num_rows, num_cols, num_rows * num_cols, num_cols + a_loads, num_rows * num_cols / (num_cols + a_loads))
         if num_cols == 0
             println("A * X = D; nrow(D), ncol(D), length(D), NumRegeristersLoaded")
@@ -34,16 +31,43 @@ function kernel_size_summary(avx512, ::Type{T} = Float64) where T
     summary
 end
 
+function num_cols_and_loads(num_rows, elements_per_register)
+    a_loads = cld(num_rows, elements_per_register)
+    (REGISTER_COUNT - a_loads - 2) ÷ a_loads, a_loads
+end
+
 """
+num_cols = elements_per_register * ( REGISTER_COUNT - 2 ) / num_rows - 1
+# square, assume approx equal
+num_rows = elements_per_register * ( REGISTER_COUNT - 2 ) / num_rows - 1
+0 = num_rows^2 + num_rows - elements_per_register * ( REGISTER_COUNT - 2 )
+
+
 Returns number of elements per register,
 and the number of rows and columns of the kernel.
 Ie, 8, 16, 14 means that 8 elements fit per register,
 and the optimal kernel is
 16x14 = 16xN * Nx14
 matrix multiplication.
+
+Rather than all the noise above, we just pick something close to square because:
+(L1_cache_size - rows*colums) ÷ (rows + columns)
+will be maximized with relatively square blocks, making that friendliest for the cache.
 """
-function pick_kernel_size(::Type{Float64} = Float64; D_count = 1, A_count = 1, X_count = 1) where T
-    # register_size == 32 ? (4,8,6) : (8,32,6)  #assumes size is either 32 or 64
-    REGISTER_SIZE == 32 ? (4,8,6) : (8,16,14)  #assumes size is either 32 or 64
+function pick_kernel_size(::Type{T}; D_count = 1, A_count = 1, X_count = 1) where T
+    T_size = sizeof(T)
+    elements_per_register = REGISTER_SIZE ÷ T_size
+    elements_in_cacheline = CACHELINE_SIZE ÷ T_size
+    elements_in_registers = elements_per_register * REGISTER_COUNT
+    approx = sqrt(0.25 + elements_per_register * (REGISTER_COUNT-2)) - 0.5
+    many_rows = round_x_to_nearest_y(approx, elements_in_cacheline, RoundUp)
+    few_rows  = round_x_to_nearest_y(approx, elements_in_cacheline, RoundDown)
+    mr_cols, mr_al = num_cols_and_loads(many_rows, elements_per_register)
+    fr_cols, fr_al = num_cols_and_loads(few_rows,  elements_per_register)
+    if many_rows * mr_cols / (mr_cols + mr_al) < few_rows * fr_cols / (fr_cols + fr_al)
+        return elements_per_register, few_rows, fr_cols
+    else
+        return elements_per_register, many_rows, mr_cols
+    end
 end
-pick_kernel_size(::Type{Core.VecElement{T}}) where T = pick_kernel_size(T)
+# pick_kernel_size(::Type{Core.VecElement{T}}) where T = pick_kernel_size(T)

@@ -1,131 +1,6 @@
 
 
 """
-Given matrices of size M, N, and P...
-This matrix assumes 3 cache levels. This means it is not especially portable, beyond x86_64.
-Level 1 and 2 is assumed to be local to each core, while level 3 is assumed shared.
-
-How do I want it to work? Each level should divide well into the next. Means for one thing
-I probably want to iterate over cache_size backwards?
-
-Goal is to minimize actual data movement that goes on.
-D (+)= A * X
-Looking at the extreme of calculating a single kernel from D in full at a time,
-we see that it
-a) Minimizes loading and unloading D from registers.
-    1) Does this maximize kernel performance? Kernels are then (m x N) * (N x p).
-b) 
-
-Should add support for how many copies of each of the matrices we have, so that we can perform calculations such as
-    D = A*X + C
-    or
-    D = A*(X + C)
-in one step, without as much un/reloading of memory.
-"""
-function blocking_structure(M, N, P, ::Type{T} = Float64; cache_size::NTuple{N,Int} = CACHE_SIZE, D_count = 1, A_count = 1, X_count = 1) where {T,N}
-    total_elements = M*N*D_count + N*P*A_count + M*P*X_count
-    L1, L2, L3 = cache_size[1:3] .÷ sizeof(T)
-    if L1 > total_elements
-        return ((M,N,P),(M,N,P),(M,N,P))
-    end
-
-    m_1, p_1 = pick_kernel_size(T, D_count = D_count, A_count = A_count, X_count = X_count)
-    Dmp_1 = m_1 * p_1
-    
-    # for cache ∈ cache_size
-    # for i ∈ N:-1:1
-    # For first cache, we do not block, but stretch "n" as large as possible for a
-    # single m x n * n x p kernel.
-    # num_elements = L1 #÷ sizeofT
-    # if num_elements > Dmp_1
-    # num_remaining = L1 - Dmp_1
-    n_1 = L1 - Dmp_1 ÷ (m_1 + p_1)
-
-    # I need to consider the case where
-    # m_1 or p_1 can be some multiple of themselves due to N being too small.
-    # n_2 = n_1 = min(N, n_1)
-    if n_1 > N
-        n_2 = n_1 = N
-        m_1, p_1 = divide_into_rough_square(L1, M, P, n_1, m_1, p_1)#, D_count = D_count, A_count = A_count, X_count = X_count)
-    else
-        n_2 = n_1
-    end
-
-    # else # currently not bothering to handle the "else".
-
-    # end
-    # num_elements = cache_size[i+1] ÷ sizeofT
-    # 0 = m^2 + 2m*n_2 - L2
-
-    if L2 > total_elements
-        return ((m_1, n_1, p_1), (M, N, P), (M, N, P))
-    end
-
-    # Try to upper bound size of m_2, p_2
-    # Consider safety factors, for other things (instructions?) in this cache?
-    m_2, p_2 = divide_into_rough_square(L2, M, P, n_2, m_1, p_1)#, D_count = D_count, A_count = A_count, X_count = X_count)
-    
-    if L3 > total_elements
-        return ((m_1, n_1, p_1), (m_2, n_2, p_2), (M, N, P))
-    end
-
-    Dmp_2 = m_2 * p_2
-    n_3 = L3 - Dmp_2 ÷ (m_2 + p_2)
-    if n_3 > N
-        m_3, p_3 = divide_into_rough_square(L3, M, P, n_3, m_2, p_2)#, D_count = D_count, A_count = A_count, X_count = X_count)
-    else
-        m_3, p_3 = m_2, p_2
-    end
-
-    Base.Cartesian.@ntuple 3 i -> (m_i, n_i, p_i)
-
-end
-
-function divide_into_rough_square(L, M, P, n, mbase, pbase)
-    L_upper_bound = floor(Int, sqrt(abs2(n) + L) - n)
-    m_2 = L_upper_bound ÷ mbase * mbase
-    if m_2 > M
-        m_2 = M
-        p_2 = min(P, (L - m_2*n) ÷ (m_2 + n) ) 
-    else
-        p_2 = L_upper_bound ÷ pbase * pbase
-        if p_2 > P
-            p_2 = P
-            m_2 = min(M, (L - p_2*n) ÷ (p_2 + n) ) 
-        end
-    end
-    m_2, p_2
-end
-
-
-# function pick_block_pattern_increment_first_only(M,N,P,m,n,p,num_elements)
-#     mnext = 1
-#     mproposal = 2
-# end
-# # Eh, forget this nonsense. Just use quadratic form, starting with the assumption of equality,
-# # and then use limits on M, N, and being a multiple of prior m and p
-# # to solve for the actual values you propose.
-# function pick_block_pattern(M,N,P,m,n,p,num_elements)
-#     if p > P
-#         return pick_block_pattern_increment_first_only(M,N,P,m,n,p,num_elements)
-#     elseif m > M
-#         return pick_block_pattern_increment_first_only(P,N,M,p,n,m,num_elements)
-#     end
-#     mprop,pprop = min(m, M) > min(p, P) ? (1,2) : (2,1)
-#     else
-#         return 1, 1
-#     end
-#     mnext, pnext = 1, 1
-#     while  mprop * pprop + mprop * n + n * pprop < num_elements
-#         mnext, pnext = mprop, prop
-#         mprop,pprop = min(m*mprop, M) > min(p*prop, P) ? (min(m, M),min(2p,P)) : (min(2m, M), min(p, P))
-#     end
-#     mnext, pnext
-# end
-
-
-
-"""
 Need to come up with a good way to implement this!!!
 56-ish works well on Ryzen (1950x)
 7-ish works well on Skylake-X (7900x)
@@ -301,7 +176,7 @@ function initialize_block(V::Type{Vec{L,T}}, row_loads, rows, cols, M, N,
         # push!(q.args, :( @show $(Symbol(A,:_,r)) ))
     end
     for c ∈ 1:cols
-        push!(q.args, :( $(Symbol(X,:_,c)) = $V($X[1,$c + cc*$cols])) )
+        push!(q.args, :( @inbounds $(Symbol(X,:_,c)) = $V($X[1,$c + cc*$cols])) )
         # push!(q.args, :( $(Symbol(X,:_,c)) = ($V)(($X)[1,$c + cc*$cols]) ) )
         # push!(q.args, :( @show $(Symbol(X,:_,c)) ))
         for r ∈ 1:row_loads
@@ -345,7 +220,7 @@ function fma_increment_block(V::Type{Vec{L,T}}, row_loads, rows, cols, M, N,
         # push!(q.args, :( @show $(Symbol(A,:_,r)) ))
     end
     for c ∈ 1:cols
-        push!(q.args, :( $(Symbol(X,:_,c)) = $V($X[n,$c + cc*$cols])) )
+        push!(q.args, :( @inbounds $(Symbol(X,:_,c)) = $V($X[n,$c + cc*$cols])) )
         # push!(q.args, :( $(Symbol(X,:_,c)) = ($V)($(X)[n,$c + cc*$cols]) ) )
         # push!(q.args, :( @show $(Symbol(X,:_,c)) ))
         for r ∈ 1:row_loads
@@ -369,7 +244,7 @@ function fma_increment_block(V::Type{Vec{L,T}}, row_loads, rows, cols, M, N, rc:
         # push!(q.args, :( @show $(Symbol(A,:_,r)) ))
     end
     for c ∈ 1:cols
-        push!(q.args, :( @inbounds $(Symbol(X,:_,c)) = $V($X[$n,$(c + cc*cols)])) )
+        push!(q.args, :( @inbounds @inbounds $(Symbol(X,:_,c)) = $V($X[$n,$(c + cc*cols)])) )
         # push!(q.args, :( @inbounds $(Symbol(X,:_,c)) = ($V)($(X)[$n,$(c + cc*cols)]) ) )
         # push!(q.args, :( @show $(Symbol(X,:_,c)) ))
         for r ∈ 1:row_loads
@@ -444,7 +319,7 @@ Likely, on every intel non-avx512 processors.
     # N = avx512 ? 64 ÷ t_size : 32 ÷ t_size
     vector_length, rows, cols = pick_kernel_size(T) #VL = VecLength
 
-    if architecture == :Ryzen #Should make 
+    if architecture == :Ryzen #Should make
         Aprefetch_freq *= 8
         Xprefetch_freq *= 8
     end
@@ -464,7 +339,7 @@ Likely, on every intel non-avx512 processors.
         # fma_block = fma_increment_block(V, row_loads, rows, cols, M)#, :pD, :pA, :pX)
         # store = store_block(V, row_loads, rows, cols, M)#, :pD)
 
-    cache_length = 64 ÷ sizeof(T)
+    cache_length = CACHELINE_SIZE ÷ sizeof(T)
     cache_loads = rows ÷ cache_length
     # prefetch_freq = 8
     maxrc, maxcc = row_chunks-1, col_chunks-1
