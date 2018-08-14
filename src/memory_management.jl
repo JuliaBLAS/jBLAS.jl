@@ -53,7 +53,11 @@ function blocking_structure(M, N, P, ::Type{T} = Float64; cache_size::NTuple{3,I
     L1, L2, L3 = cache_size .÷ sizeof(T)
     if L1 > total_elements
         epr, m_1, p_1 = pick_kernel_size(T, D_count = D_count, A_count = A_count, X_count = X_count)
-        return ((m_1,N,p_1),(M,N,P),(M,N,P)),0
+        # if m_1 <= M && p_1 <= P
+        #     return ((M,N,P),(M,N,P),(M,N,P)),-1
+        # else
+        return ((min(m_1,M),N,min(p_1,P)),(M,N,P),(M,N,P)),0
+        # end
         # return ((M,N,P),(M,N,P),(M,N,P)),0
     end
 
@@ -68,7 +72,7 @@ function blocking_structure(M, N, P, ::Type{T} = Float64; cache_size::NTuple{3,I
     # n_2 = n_1 = min(N, n_1)
     if n_1 > N
         n_2 = n_1 = N
-        m_1, p_1 = divide_into_rough_square(L1, M, P, n_1, m_1, p_1)#, D_count = D_count, A_count = A_count, X_count = X_count)
+        # m_1, p_1 = divide_into_rough_square(L1, M, P, n_1, m_1, p_1)#, D_count = D_count, A_count = A_count, X_count = X_count)
     else
         n_2 = n_1
     end

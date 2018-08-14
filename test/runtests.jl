@@ -1,23 +1,55 @@
 # Need to turn this to actual tests.
 
 using SIMDArrays, StaticArrays, LinearAlgebra, BenchmarkTools
-b = SIMDArrays.randsimd(13,11);
-c = SIMDArrays.randsimd(11,12);
-d = SIMDArrays.randsimd(13,12);
-mul!(d, b, c); d
-
-smd = MMatrix{13,12}(d);# smd .= d;
-smb = MMatrix{13,11}(b); smb .= b;
-smc = MMatrix{11,12}(c); smc .= c;
-mul!(smd, smb, smc)
+function copyloop!(x, y) # Broadcasts slow to compile at the moment; will fix when I implement broadcasting!
+    @boundscheck size(x) == size(y) || throw(BoundsError())
+    @inbounds for i ∈ eachindex(x,y)
+        x[i] = y[i]
+    end
+end
 BLAS.set_num_threads(1)
 
-@benchmark mul!($smd, $smb, $smc)
-@benchmark mul!($d, $b, $c)
+M,N,P = 24, 18, 18# caused stack overflow error!
+M,N,P = 16, 32, 14# caused stack overflow error!
+# causes allocations ?!?!? when calling initkernel directly?!?!?
+
+M,N,P = 13, 12, 12
+d = SIMDArrays.randsimd(M,P);
+a = SIMDArrays.randsimd(M,N);
+x = SIMDArrays.randsimd(N,P);
+mul!(d, a, x); d
+
+smd = MMatrix{M,P,Float64}(undef);# smd .= d;
+sma = MMatrix{M,N,Float64}(undef); copyloop!(sma, a)
+smx = MMatrix{N,P,Float64}(undef); copyloop!(smx, x)
+mul!(smd, sma, smx)
+
+@benchmark mul!($smd, $sma, $smx)
+@benchmark mul!($d, $a, $x)
+
+
+M,N,P = 8, 8, 8
+M,N,P = 16, 32, 14
+M,N,P = 49, 49, 49
+M,N,P = 37, 37, 37
+M,N,P = 36, 36, 36
+M,N,P = 32, 36, 36
+d = SIMDArrays.randsimd(M,P);
+a = SIMDArrays.randsimd(M,N);
+x = SIMDArrays.randsimd(N,P);
+# mul!(d, a, x); d
+
+smd = MMatrix{M,P,Float64}(undef);# smd .= d;
+sma = MMatrix{M,N,Float64}(undef); copyloop!(sma, a)
+smx = MMatrix{N,P,Float64}(undef); copyloop!(smx, x)
+# mul!(smd, sma, smx)
+
+@benchmark mul!($smd, $sma, $smx)
+@benchmark mul!($d, $a, $x)
 
 
 using SIMDArrays, StaticArrays, LinearAlgebra, BenchmarkTools
-function copyloop!(x, y)
+function copyloop!(x, y) # Broadcasts slow to compile at the moment; will fix when I implement broadcasting!
     @boundscheck size(x) == size(y) || throw(BoundsError())
     @inbounds for i ∈ eachindex(x,y)
         x[i] = y[i]
@@ -35,9 +67,26 @@ smd = MMatrix{M,P,Float64}(undef);# smd .= d;
 sma = MMatrix{M,N,Float64}(undef); copyloop!(sma, a)
 smx = MMatrix{N,P,Float64}(undef); copyloop!(smx, x)
 mul!(smd, sma, smx)
+BLAS.set_num_threads(1)
 
 @benchmark mul!($smd, $sma, $smx)
 @benchmark mul!($d, $a, $x)
+
+
+M2,N2,P2 = 700, 700, 700
+D = SIMDArrays.randsimd(M2,P2);
+A = SIMDArrays.randsimd(M2,N2);
+X = SIMDArrays.randsimd(N2,P2);
+mul!(D, A, X); D
+
+smD = MMatrix{M2,P2,Float64}(undef);# smd .= d;
+smA = MMatrix{M2,N2,Float64}(undef); copyloop!(smA, A)
+smX = MMatrix{N2,P2,Float64}(undef); copyloop!(smX, X)
+mul!(smD, smA, smX)
+
+@benchmark mul!($smD, $smA, $smX)
+@benchmark mul!($D, $A, $X)
+
 
 
 using OhMyREPL, jBLAS, BenchmarkTools, LinearAlgebra
