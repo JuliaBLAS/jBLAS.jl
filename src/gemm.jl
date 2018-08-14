@@ -1,167 +1,420 @@
-
-
-"""
-Need to come up with a good way to implement this!!!
-56-ish works well on Ryzen (1950x)
-7-ish works well on Skylake-X (7900x)
-
-But this is way more complicated. My whole prefetching strategy probably needs to be totally reworked. Need to study the behavior of memory and matmul implementations, I guess.
-On Haswell, 10 works best for smallish matrices, and then takes a dramatic performance hit for 11 or greater. For larger matrices, performance improves.
-A better model is probably more aware of the sizes of the different caches.
-
-I think one advantage of following a recursive strategy is that you
-may be able to structure it in a way so that there's a clear pattern / structure for prefetching blocks into different cache levels.
-Moreover, recursive strategies are often called "cache oblivious", because they're indepdent of the cache sizes for a particular architecture. That is probably the most reasonable approach.
-"""
-function pick_prefetch_strategy()
-
-
-end
-
-using Base: llvmcall
-
-# args are address, read/write, locality, cache type
-@generated function prefetch(address, ::Val{Locality} = Val(1), ::Val{RorW} = Val(0)) where {Locality, RorW}
-    prefetch_call_string = """%addr = inttoptr i64 %0 to i8*
-    call void @llvm.prefetch(i8* %addr, i32 $RorW, i32 $Locality, i32 1)
-    ret void"""
-    quote
-        $(Expr(:meta, :inline))
-        llvmcall(("declare void @llvm.prefetch(i8* , i32 , i32 , i32 )",
-        $prefetch_call_string), Cvoid, Tuple{Ptr{Cvoid}}, address)
+@generated function kernel!(pD::Ptr{T}, pA::Ptr{T}, pX::Ptr{T}, ::Kernel{Mₖ,Pₖ,stride_AD,stride_X,N}) where {Mₖ,Pₖ,stride_AD,stride_X,N,T}
+    T_size = sizeof(T)
+    AD_stride = stride_AD * T_size
+    X_stride = stride_X * T_size
+    L = REGISTER_SIZE ÷ T_size
+    Q, r = divrem(Mₖ, L) #Assuming Mₖ is a multiple of L
+    if Q > 0
+        r == 0 || throw("Number of rows $Mₖ not a multiple of register size: $REGISTER_SIZE.")
+    else
+        L = r
+        Q = 1
     end
-end
-
-@generated function jmul!(D::AbstractMatrix{T}, A::AbstractMatrix{T}, X::AbstractMatrix{T}) where T
-    m, n = size(A)
-    p = size(X,2)
-    # t_size = sizeof(T)
-    # cacheline_size = 64 ÷ t_size
-    # N = avx512 ? 64 ÷ t_size : 32 ÷ t_size
-    rows, cols = pick_kernel_size(T)
-
+    V = Vec{L,T}
     quote
-
-        @boundscheck begin
-            m == size(D,1) || throw(BoundsError())
-            n == size(X,1) || throw(BoundsError())
-            p == size(D,2) || throw(BoundsError())
+        @nexprs $Pₖ p -> @nexprs $Q q -> Dx_p_q = vload($V, pD + $REGISTER_SIZE*(q-1) + $AD_stride*(p-1))
+        for n ∈ 0:$(N-1)
+            @nexprs $Pₖ p -> begin
+                @inbounds vX = $V(unsafe_load(pX + n*$T_size + (p-1)*$X_stride))
+                @nexprs $Q q -> begin
+                    vA_q = vload($V, pA + n*$AD_stride + $REGISTER_SIZE*(q-1))
+                    Dx_p_q = fma(vA_q, vX, Dx_p_q)
+                end
+            end
         end
+        @nexprs $Pₖ p -> @nexprs $Q q -> vstore(Dx_p_q, pD + $REGISTER_SIZE*(q-1) + $AD_stride*(p-1))
+        nothing
+    end
+end
+@generated function initkernel!(pD::Ptr{T}, pA::Ptr{T}, pX::Ptr{T}, K::Kernel{Mₖ,Pₖ,stride_AD,stride_X,N}) where {Mₖ,Pₖ,stride_AD,stride_X,N,T}
+    T_size = sizeof(T)
+    AD_stride = stride_AD * T_size
+    X_stride = stride_X * T_size
+    L = REGISTER_SIZE ÷ T_size
+    Q, r = divrem(Mₖ, L) #Assuming Mₖ is a multiple of L
+    if Q > 0
+        r == 0 || throw("Number of rows $Mₖ not a multiple of register size: $REGISTER_SIZE.")
+    else
+        L = r
+        Q = 1
+    end
+    V = Vec{L,T}
+    quote
+        @nexprs $Pₖ p -> begin
+            @inbounds vX = $V(unsafe_load(pX + (p-1)*$X_stride))
+            @nexprs $Q q -> begin
+                vA_q = vload($V, pA + $REGISTER_SIZE*(q-1))
+                Dx_p_q = vA_q * vX
+            end
+        end
+        for n ∈ 1:$(N-1)
+            @nexprs $Pₖ p -> begin
+                @inbounds vX = $V(unsafe_load(pX + n*$T_size + (p-1)*$X_stride))
+                @nexprs $Q q -> begin
+                    vA_q = vload($V, pA + n*$AD_stride + $REGISTER_SIZE*(q-1))
+                    Dx_p_q = fma(vA_q, vX, Dx_p_q)
+                end
+            end
+        end
+        @nexprs $Pₖ p -> @nexprs $Q q -> vstore(Dx_p_q, pD + $REGISTER_SIZE*(q-1) + $AD_stride*(p-1))
+        nothing
+    end
+end
+@generated function kernel!(pD::Ptr{T}, pA::Ptr{T}, pX::Ptr{T}, ::Kernel{Mₖ,Pₖ,stride_AD,stride_X,N}, pf::PrefetchAX) where {Mₖ,Pₖ,stride_AD,stride_X,N,T}
+    T_size = sizeof(T)
+    AD_stride = stride_AD * T_size
+    X_stride = stride_X * T_size
+    L = REGISTER_SIZE ÷ T_size
+    Q, r = divrem(Mₖ, L) #Assuming Mₖ is a multiple of L
+    if Q > 0
+        r == 0 || throw("Number of rows $Mₖ not a multiple of register size: $REGISTER_SIZE.")
+    else
+        L = r
+        Q = 1
+    end
+    V = Vec{L,T}
+    C = CACHELINE_SIZE ÷ T_size
+    Qₚ = Mₖ ÷ C
+    quote
+        @nexprs $Pₖ p -> @nexprs $Q q -> Dx_p_q = vload($V, pD + $REGISTER_SIZE*(q-1) + $AD_stride*(p-1))
+        for n₁ ∈ 0:$C:$(N-C)
+            for n ∈ n₁:n₁+$(C-1)
+                @nexprs $Pₖ p -> begin
+                    @inbounds vX = $V(unsafe_load(pX + n*$T_size + (p-1)*$X_stride))
+                    @nexprs $Q q -> begin
+                        vA_q = vload($V, pA + n*$AD_stride + $REGISTER_SIZE*(q-1))
+                        Dx_p_q = fma(vA_q, vX, Dx_p_q)
+                    end
+                end
+                @nexprs $Qₚ q -> prefetch(pA + pf.A + n*$AD_stride + $CACHELINE_SIZE*(q-1), Val(3), Val(0))
+            end
+            @nexprs $Pₖ p -> prefetch(pX + pf.X + n₁*$T_size + (p-1)*$X_stride, Val(3), Val(0))
+        end
+        for n ∈ $(N - (N % C)):$(N-1)
+            @nexprs $Pₖ p -> begin
+                @inbounds vX = $V(unsafe_load(pX + n*$T_size + (p-1)*$X_stride))
+                @nexprs $Q q -> begin
+                    vA_q = vload($V, pA + n*$AD_stride + $REGISTER_SIZE*(q-1))
+                    Dx_p_q = fma(vA_q, vX, Dx_p_q)
+                end
+            end
+            @nexprs $Qₚ q -> prefetch(pA + pf.A + n*$AD_stride + $CACHELINE_SIZE*(q-1), Val(3), Val(0))
+        end
+        @nexprs $Pₖ p -> begin
+            prefetch(pX + pf.X + $(N*T_size) + (p-1)*$X_stride, Val(3), Val(0))
+            @nexprs $Q q -> vstore(Dx_p_q, pD + $REGISTER_SIZE*(q-1) + $AD_stride*(p-1))
+        end
+        nothing
+    end
+end
+@generated function initkernel!(pD::Ptr{T}, pA::Ptr{T}, pX::Ptr{T}, K::Kernel{Mₖ,Pₖ,stride_AD,stride_X,N}, pf::PrefetchAX) where {Mₖ,Pₖ,stride_AD,stride_X,N,T}
+    T_size = sizeof(T)
+    AD_stride = stride_AD * T_size
+    X_stride = stride_X * T_size
+    L = REGISTER_SIZE ÷ T_size
+    Q, r = divrem(Mₖ, L) #Assuming Mₖ is a multiple of L
+    if Q > 0
+        r == 0 || throw("Number of rows $Mₖ not a multiple of register size: $REGISTER_SIZE.")
+    else
+        L = r
+        Q = 1
+    end
+    V = Vec{L,T}
+    C = CACHELINE_SIZE ÷ T_size
+    Qₚ = Mₖ ÷ C
+    quote
+        @nexprs $Pₖ p -> begin
+            @inbounds vX = $V(unsafe_load(pX + (p-1)*$X_stride))
+            @nexprs $Q q -> begin
+                vA_q = vload($V, pA + $REGISTER_SIZE*(q-1))
+                Dx_p_q = vA_q * vX
+            end
+        end
+        @nexprs $Qₚ q -> prefetch(pA + pf.A + $CACHELINE_SIZE*(q-1), Val(3), Val(0))
+        for n ∈ 1:$(C-1)
+            @nexprs $Pₖ p -> begin
+                @inbounds vX = $V(unsafe_load(pX + n*$T_size + (p-1)*$X_stride))
+                @nexprs $Q q -> begin
+                    vA_q = vload($V, pA + n*$AD_stride + $REGISTER_SIZE*(q-1))
+                    Dx_p_q = fma(vA_q, vX, Dx_p_q)
+                end
+            end
+            @nexprs $Qₚ q -> prefetch(pA + pf.A + n*$AD_stride + $CACHELINE_SIZE*(q-1), Val(3), Val(0))
+        end
+        @nexprs $Pₖ p -> prefetch(pX + pf.X + (p-1)*$X_stride, Val(3), Val(0))
+        for n₁ ∈ $C:$C:$(N-C)
+            for n ∈ n₁:n₁+$(C-1)
+                @nexprs $Pₖ p -> begin
+                    @inbounds vX = $V(unsafe_load(pX + n*$T_size + (p-1)*$X_stride))
+                    @nexprs $Q q -> begin
+                        vA_q = vload($V, pA + n*$AD_stride + $REGISTER_SIZE*(q-1))
+                        Dx_p_q = fma(vA_q, vX, Dx_p_q)
+                    end
+                end
+                @nexprs $Qₚ q -> prefetch(pA + pf.A + n*$AD_stride + $CACHELINE_SIZE*(q-1), Val(3), Val(0))
+            end
+            @nexprs $Pₖ p -> prefetch(pX + pf.X + n₁*$T_size + (p-1)*$X_stride, Val(3), Val(0))
+        end
+        for n ∈ $(N - (N % C)):$(N-1)
+            @nexprs $Pₖ p -> begin
+                @inbounds vX = $V(unsafe_load(pX + n*$T_size + (p-1)*$X_stride))
+                @nexprs $Q q -> begin
+                    vA_q = vload($V, pA + n*$AD_stride + $REGISTER_SIZE*(q-1))
+                    Dx_p_q = fma(vA_q, vX, Dx_p_q)
+                end
+            end
+            @nexprs $Qₚ q -> prefetch(pA + pf.A + n*$AD_stride + $CACHELINE_SIZE*(q-1), Val(3), Val(0))
+        end
+        @nexprs $Pₖ p -> begin
+            prefetch(pX + pf.X + $(N*T_size) + (p-1)*$X_stride, Val(3), Val(0))
+            @nexprs $Q q -> vstore(Dx_p_q, pD + $REGISTER_SIZE*(q-1) + $AD_stride*(p-1))
+        end
+        nothing
+    end
+end
 
+@generated function kernel!(pD::Ptr{T}, pA::Ptr{T}, pX::Ptr{T}, ::Kernel{Mₖ,Pₖ,stride_AD,stride_X,N}, pf::PrefetchA) where {Mₖ,Pₖ,stride_AD,stride_X,N,T}
+    T_size = sizeof(T)
+    AD_stride = stride_AD * T_size
+    X_stride = stride_X * T_size
+    L = REGISTER_SIZE ÷ T_size
+    Q, r = divrem(Mₖ, L) #Assuming Mₖ is a multiple of L
+    if Q > 0
+        r == 0 || throw("Number of rows $Mₖ not a multiple of register size: $REGISTER_SIZE.")
+    else
+        L = r
+        Q = 1
+    end
+    V = Vec{L,T}
+    C = CACHELINE_SIZE ÷ T_size
+    Qₚ = Mₖ ÷ C
+    quote
+        @nexprs $Pₖ p -> @nexprs $Q q -> Dx_p_q = vload($V, pD + $REGISTER_SIZE*(q-1) + $AD_stride*(p-1))
+        for n ∈ 0:$(N-1)
+            @nexprs $Pₖ p -> begin
+                @inbounds vX = $V(unsafe_load(pX + n*$T_size + (p-1)*$X_stride))
+                @nexprs $Q q -> begin
+                    vA_q = vload($V, pA + n*$AD_stride + $REGISTER_SIZE*(q-1))
+                    Dx_p_q = fma(vA_q, vX, Dx_p_q)
+                end
+            end
+            @nexprs $Qₚ q -> prefetch(pA + pf.A + n*$AD_stride + $CACHELINE_SIZE*(q-1), Val(3), Val(0))
+        end
+        @nexprs $Pₖ p -> @nexprs $Q q -> vstore(Dx_p_q, pD + $REGISTER_SIZE*(q-1) + $AD_stride*(p-1))
+        nothing
     end
 end
-function prefetch_storage(V::Type{Vec{L,T}}, CL, cache_loads, rows, cols, M, maxrc, maxcc, loc = 2, D = :pD) where {L,T}
-    q1 = quote end
-    q2 = quote end
-    st = sizeof(T)
-    for c ∈ 1:cols, cl ∈ 1:cache_loads
-        push!(q1.args, :(prefetch($D + $((cl-1)*CL*st + M*(c - 1)*st + rows*st) + rc*$(rows*st) + cc*$(cols*M*st), Val($loc), Val(1))))
-        push!(q2.args, :(prefetch($D + $((cl-1)*CL*st + M*(c - 1)*st + cols*M*st) + cc*$(cols*M*st), Val($loc), Val(1))))
-        # prefetch() && push!(q.args, :(prefetch($(Symbol(:p, A,:_,r)) + $(M*st) , Val(3), Val(1))))
+@generated function initkernel!(pD::Ptr{T}, pA::Ptr{T}, pX::Ptr{T}, K::Kernel{Mₖ,Pₖ,stride_AD,stride_X,N}, pf::PrefetchA) where {Mₖ,Pₖ,stride_AD,stride_X,N,T}
+    T_size = sizeof(T)
+    AD_stride = stride_AD * T_size
+    X_stride = stride_X * T_size
+    L = REGISTER_SIZE ÷ T_size
+    Q, r = divrem(Mₖ, L) #Assuming Mₖ is a multiple of L
+    if Q > 0
+        r == 0 || throw("Number of rows $Mₖ not a multiple of register size: $REGISTER_SIZE.")
+    else
+        L = r
+        Q = 1
     end
+    V = Vec{L,T}
+    C = CACHELINE_SIZE ÷ T_size
+    Qₚ = Mₖ ÷ C
     quote
-        if rc != $maxrc
-            $q1
-        elseif cc != $maxcc
-            $q2
+        @nexprs $Pₖ p -> begin
+            @inbounds vX = $V(unsafe_load(pX + (p-1)*$X_stride))
+            @nexprs $Q q -> begin
+                vA_q = vload($V, pA + $REGISTER_SIZE*(q-1))
+                Dx_p_q = vA_q * vX
+            end
         end
+        @nexprs $Qₚ q -> prefetch(pA + pf.A + $CACHELINE_SIZE*(q-1), Val(3), Val(0))
+        for n ∈ 1:$(N-1)
+            @nexprs $Pₖ p -> begin
+                @inbounds vX = $V(unsafe_load(pX + n*$T_size + (p-1)*$X_stride))
+                @nexprs $Q q -> begin
+                    vA_q = vload($V, pA + n*$AD_stride + $REGISTER_SIZE*(q-1))
+                    Dx_p_q = fma(vA_q, vX, Dx_p_q)
+                end
+            end
+            @nexprs $Qₚ q -> prefetch(pA + pf.A + n*$AD_stride + $CACHELINE_SIZE*(q-1), Val(3), Val(0))
+        end
+        @nexprs $Pₖ p -> @nexprs $Q q -> vstore(Dx_p_q, pD + $REGISTER_SIZE*(q-1) + $AD_stride*(p-1))
+        nothing
     end
 end
 
-"""
-Could introducing branches in these prefetch statements slow things down?
-What are the consequences of these?
-Should the new row prefetch be reformulated into an ifelse statement?
-"""
-function prefetch_load_Aiq(V::Type{Vec{L,T}}, CL, cache_loads, rows, cols, M,N, maxrc,
-                            prefetch_freq, loc = 2, A = :pA) where {L,T}
-    q1 = quote end
-    q2 = quote end
-    st = sizeof(T)
-    for cl ∈ 0:cache_loads-1
-        push!(q1.args, :(prefetch($(A) + $(cl*CL*st-M*st+M*st*prefetch_freq) + rc*$(rows*st), Val($loc), Val(0))))
-        push!(q2.args, :(prefetch($(A) + $(cl*CL*st-(N-prefetch_freq+1)*M*st+rows*st) + rc*$(rows*st), Val($loc), Val(0))))
+@generated function kernel!(pD::Ptr{T}, pA::Ptr{T}, pX::Ptr{T}, ::Kernel{Mₖ,Pₖ,stride_AD,stride_X,N}, pf::PrefetchX) where {Mₖ,Pₖ,stride_AD,stride_X,N,T}
+    T_size = sizeof(T)
+    AD_stride = stride_AD * T_size
+    X_stride = stride_X * T_size
+    L = REGISTER_SIZE ÷ T_size
+    Q, r = divrem(Mₖ, L) #Assuming Mₖ is a multiple of L
+    if Q > 0
+        r == 0 || throw("Number of rows $Mₖ not a multiple of register size: $REGISTER_SIZE.")
+    else
+        L = r
+        Q = 1
     end
+    V = Vec{L,T}
+    C = CACHELINE_SIZE ÷ T_size
+    Qₚ = Mₖ ÷ C
     quote
-        if 0 < $(N-prefetch_freq) # Don't jump to new row
-            $q1
-        elseif rc != $maxrc # Don't prefetch if there're no more rows to prefetch
-            $q2
+        @nexprs $Pₖ p -> @nexprs $Q q -> Dx_p_q = vload($V, pD + $REGISTER_SIZE*(q-1) + $AD_stride*(p-1))
+        for n₁ ∈ 0:$C:$(N-C)
+            for n ∈ n₁:n₁+$(C-1)
+                @nexprs $Pₖ p -> begin
+                    @inbounds vX = $V(unsafe_load(pX + n*$T_size + (p-1)*$X_stride))
+                    @nexprs $Q q -> begin
+                        vA_q = vload($V, pA + n*$AD_stride + $REGISTER_SIZE*(q-1))
+                        Dx_p_q = fma(vA_q, vX, Dx_p_q)
+                    end
+                end
+            end
+            @nexprs $Pₖ p -> prefetch(pX + pf.X + n₁*$T_size + (p-1)*$X_stride, Val(3), Val(0))
         end
+        for n ∈ $(N - (N % C)):$(N-1)
+            @nexprs $Pₖ p -> begin
+                @inbounds vX = $V(unsafe_load(pX + n*$T_size + (p-1)*$X_stride))
+                @nexprs $Q q -> begin
+                    vA_q = vload($V, pA + n*$AD_stride + $REGISTER_SIZE*(q-1))
+                    Dx_p_q = fma(vA_q, vX, Dx_p_q)
+                end
+            end
+        end
+        @nexprs $Pₖ p -> begin
+            prefetch(pX + pf.X + $(N*T_size) + (p-1)*$X_stride, Val(3), Val(0))
+            @nexprs $Q q -> vstore(Dx_p_q, pD + $REGISTER_SIZE*(q-1) + $AD_stride*(p-1))
+        end
+        nothing
     end
 end
-function prefetch_load_Aq(V::Type{Vec{L,T}}, CL, cache_loads, rows, cols, M,N, maxrc,
-                            prefetch_freq, loc = 2, A = :pA) where {L,T}
-    q1 = quote end
-    q2 = quote end
-    st = sizeof(T)
-    for cl ∈ 0:cache_loads-1
-        push!(q1.args, :(prefetch($(A) + $(cl*CL*st-M*st+M*st*prefetch_freq) + rc*$(rows*st) + n*$(M*st), Val($loc), Val(0))) )
-        push!(q2.args, :(prefetch($(A) + $(cl*CL*st-(N-prefetch_freq+1)*M*st+rows*st) + rc*$(rows*st) + n*$(M*st), Val($loc), Val(0))) )
+@generated function initkernel!(pD::Ptr{T}, pA::Ptr{T}, pX::Ptr{T}, K::Kernel{Mₖ,Pₖ,stride_AD,stride_X,N}, pf::PrefetchX) where {Mₖ,Pₖ,stride_AD,stride_X,N,T}
+    T_size = sizeof(T)
+    AD_stride = stride_AD * T_size
+    X_stride = stride_X * T_size
+    L = REGISTER_SIZE ÷ T_size
+    Q, r = divrem(Mₖ, L) #Assuming Mₖ is a multiple of L
+    if Q > 0
+        r == 0 || throw("Number of rows $Mₖ not a multiple of register size: $REGISTER_SIZE.")
+    else
+        L = r
+        Q = 1
     end
+    V = Vec{L,T}
+    C = CACHELINE_SIZE ÷ T_size
+    Qₚ = Mₖ ÷ C
     quote
-        if n < $(N-prefetch_freq) # Don't jump to new row
-            $q1
-        elseif rc != $maxrc # Don't prefetch if there're no more rows to prefetch
-            $q2
+        @nexprs $Pₖ p -> begin
+            @inbounds vX = $V(unsafe_load(pX + (p-1)*$X_stride))
+            @nexprs $Q q -> begin
+                vA_q = vload($V, pA + $REGISTER_SIZE*(q-1))
+                Dx_p_q = vA_q * vX
+            end
         end
+        for n ∈ 1:$(C-1)
+            @nexprs $Pₖ p -> begin
+                @inbounds vX = $V(unsafe_load(pX + n*$T_size + (p-1)*$X_stride))
+                @nexprs $Q q -> begin
+                    vA_q = vload($V, pA + n*$AD_stride + $REGISTER_SIZE*(q-1))
+                    Dx_p_q = fma(vA_q, vX, Dx_p_q)
+                end
+            end
+        end
+        @nexprs $Pₖ p -> prefetch(pX + pf.X + (p-1)*$X_stride, Val(3), Val(0))
+        for n₁ ∈ $C:$C:$(N-C)
+            for n ∈ n₁:n₁+$(C-1)
+                @nexprs $Pₖ p -> begin
+                    @inbounds vX = $V(unsafe_load(pX + n*$T_size + (p-1)*$X_stride))
+                    @nexprs $Q q -> begin
+                        vA_q = vload($V, pA + n*$AD_stride + $REGISTER_SIZE*(q-1))
+                        Dx_p_q = fma(vA_q, vX, Dx_p_q)
+                    end
+                end
+            end
+            @nexprs $Pₖ p -> prefetch(pX + pf.X + n₁*$T_size + (p-1)*$X_stride, Val(3), Val(0))
+        end
+        for n ∈ $(N - (N % C)):$(N-1)
+            @nexprs $Pₖ p -> begin
+                @inbounds vX = $V(unsafe_load(pX + n*$T_size + (p-1)*$X_stride))
+                @nexprs $Q q -> begin
+                    vA_q = vload($V, pA + n*$AD_stride + $REGISTER_SIZE*(q-1))
+                    Dx_p_q = fma(vA_q, vX, Dx_p_q)
+                end
+            end
+        end
+        @nexprs $Pₖ p -> begin
+            prefetch(pX + pf.X + $(N*T_size) + (p-1)*$X_stride, Val(3), Val(0))
+            @nexprs $Q q -> vstore(Dx_p_q, pD + $REGISTER_SIZE*(q-1) + $AD_stride*(p-1))
+        end
+        nothing
     end
 end
-function prefetch_load_Xq(V::Type{Vec{L,T}}, CL, rows, cols, N, maxrc, maxcc,
-                            prefetch_freq, loc = 2, X = :pX) where {L,T}
-    q1 = quote end
-    q2 = quote end
-    st = sizeof(T)
-    # for c ∈ 1:cols
-    #     push!(q.args, :( $(Symbol(X,:_,c)) = ($V)($(X)[n,$c + cc*$cols]) ) )
-    # end
-    for c ∈ 1:cols
-        push!(q1.args, :(prefetch($X + ($(c*N+prefetch_freq*CL) + cc*$(cols*N) + pxn)*$st , Val($loc), Val(0))))
-        push!(q2.args, :(prefetch($X + ($((cols+c-1)*N+prefetch_freq*CL) + cc*$(cols*N) + pxn)*$st , Val($loc), Val(0))))
-    end
-    quote
-        if pxn < $(N-prefetch_freq*CL)
-            $q1
-        elseif cc != $maxcc # plus (cols - 1) * N, because jumping cols to the right, and starting at top
-            $q2
-        end
-    end
-end
-function prefetch_load_Xiq(V::Type{Vec{L,T}}, CL, rows, cols, N, maxrc, maxcc,
-                            prefetch_freq, loc = 2, X = :pX) where {L,T}
-    q1 = quote end
-    q2 = quote end
-    st = sizeof(T)
-    # for c ∈ 1:cols
-    #     push!(q.args, :( $(Symbol(X,:_,c)) = ($V)($(X)[n,$c + cc*$cols]) ) )
-    # end
-    for c ∈ 1:cols
-        push!(q1.args, :(prefetch($X + ($(c*N+prefetch_freq*CL) + cc*$(cols*N) )*$st , Val($loc), Val(0))))
-        push!(q2.args, :(prefetch($X + ($((cols+c-1)*N+prefetch_freq*CL) + cc*$(cols*N))*$st , Val($loc), Val(0))))
-    end
-    quote
-        if 0 < $(N-prefetch_freq*CL)
-            $q1
-        elseif cc != $maxcc # plus (cols - 1) * N, because jumping cols to the right, and starting at top
-            $q2
-        end
-    end
-end
+
 function store_block(V::Type{Vec{L,T}}, row_loads, rows, cols, M, D::Symbol = :D) where {L,T}
     q = quote end
     st = sizeof(T)
     for c ∈ 1:cols, r ∈ 1:row_loads
-        push!(q.args, :( vstore( $(Symbol(D,:_,r,:_,c)), $D + $((r-1)*L*st + M*(c - 1)*st ) + rc*$(rows*st) + cc*$(cols*M*st)) ) )
+        push!(q.args, :( vstore( $(Symbol(D,:_,r,:_,c)), $D + $((r-1)*L*st + M*(c-1)*st ) + rc*$(rows*st) + cc*$(cols*M*st)) ) )
         # prefetch() && push!(q.args, :(prefetch($(Symbol(:p, A,:_,r)) + $(M*st) , Val(3), Val(1))))
     end
     q
 end
-function store_block(V::Type{Vec{L,T}}, row_loads, rows, cols, M, rc::Int, cc::Int, D = :D) where {L,T}
+function store_block(V::Type{Vec{L,T}}, row_loads, rows, cols, M, rc::Int, cc::Int, pₖ::Int = cols, D::Symbol = :D) where {L,T}
+    q = quote end
+    st = sizeof(T)
+    for c ∈ 1:pₖ, r ∈ 1:row_loads
+        push!(q.args, :( vstore($(Symbol(D,:_,r,:_,c)), $D + $((r-1)*L*st + M*(c-1)*st + rc*rows*st + cc*cols*M*st)) ) )
+        # prefetch() && push!(q.args, :(prefetch($(Symbol(:p, A,:_,r)) + $(M*st) , Val(3), Val(1))))
+    end
+    q
+end
+function store_block(V::Type{Vec{L,T}}, row_loads, rows, cols, M, rc::Int, cc::Symbol, pₖ::Int = cols, D::Symbol = :D) where {L,T}
+    q = quote end
+    st = sizeof(T)
+    for c ∈ 1:pₖ, r ∈ 1:row_loads
+        push!(q.args, :( vstore($(Symbol(D,:_,r,:_,c)), $D + $((r-1)*L*st + M*(c-1)*st + rc*rows*st) + $cc*$(cols*M*st)) ) )
+    end
+    q
+end
+function store_block(V::Type{Vec{L,T}}, row_loads, rows, cols, M, rc::Symbol, cc::Int, pₖ::Int = cols, D::Symbol = :D) where {L,T}
+    q = quote end
+    st = sizeof(T)
+    for c ∈ 1:pₖ, r ∈ 1:row_loads
+        push!(q.args, :( vstore($(Symbol(D,:_,r,:_,c)), $D + $((r-1)*L*st + M*(c-1)*st + cc*cols*M*st) + $rc*$(rows*st) ) ) )
+    end
+    q
+end
+function load_block(V::Type{Vec{L,T}}, row_loads, rows, cols, M, D::Symbol = :D) where {L,T}
     q = quote end
     st = sizeof(T)
     for c ∈ 1:cols, r ∈ 1:row_loads
-        push!(q.args, :( vstore($(Symbol(D,:_,r,:_,c)), $D + $((r-1)*L*st + M*(c - 1)*st + rc*rows*st + cc*cols*M*st)) ) )
+        push!(q.args, :( $(Symbol(D,:_,r,:_,c)) = vstore($V, $D + $((r-1)*L*st + M*(c-1)*st ) + rc*$(rows*st) + cc*$(cols*M*st)) ) )
         # prefetch() && push!(q.args, :(prefetch($(Symbol(:p, A,:_,r)) + $(M*st) , Val(3), Val(1))))
+    end
+    q
+end
+function load_block(V::Type{Vec{L,T}}, row_loads, rows, cols, M, rc::Int, cc::Int, pₖ::Int = cols, D::Symbol = :D) where {L,T}
+    q = quote end
+    st = sizeof(T)
+    for c ∈ 1:pₖ, r ∈ 1:row_loads
+        push!(q.args, :( $(Symbol(D,:_,r,:_,c)) = vload($V, $D + $((r-1)*L*st + M*(c-1)*st + rc*rows*st + cc*cols*M*st)) ) )
+        # prefetch() && push!(q.args, :(prefetch($(Symbol(:p, A,:_,r)) + $(M*st) , Val(3), Val(1))))
+    end
+    q
+end
+function load_block(V::Type{Vec{L,T}}, row_loads, rows, cols, M, rc::Int, cc::Symbol, pₖ::Int = cols, D::Symbol = :D) where {L,T}
+    q = quote end
+    st = sizeof(T)
+    for c ∈ 1:pₖ, r ∈ 1:row_loads
+        push!(q.args, :($(Symbol(D,:_,r,:_,c)) = vload($V, $D + $((r-1)*L*st + M*(c-1)*st + rc*rows*st) + $cc*$(cols*M*st)) ) )
+    end
+    q
+end
+function load_block(V::Type{Vec{L,T}}, row_loads, rows, cols, M, rc::Symbol, cc::Int, pₖ::Int = cols, D::Symbol = :D) where {L,T}
+    q = quote end
+    st = sizeof(T)
+    for c ∈ 1:pₖ, r ∈ 1:row_loads
+        push!(q.args, :( $(Symbol(D,:_,r,:_,c)) = vload($V, $D + $((r-1)*L*st + M*(c-1)*st + cc*cols*M*st) + $rc*$(rows*st) ) ) )
     end
     q
 end
@@ -186,7 +439,43 @@ function initialize_block(V::Type{Vec{L,T}}, row_loads, rows, cols, M, N,
     end
     q
 end
-function initialize_block(V::Type{Vec{L,T}}, row_loads, rows, cols, M, N, rc::Int, cc::Int,
+function initialize_block(V::Type{Vec{L,T}}, row_loads, rows, cols, M, N, rc::Int, cc::Symbol, pₖ::Int = cols,
+            D::Symbol = :D, A::Symbol = :A, X::Symbol = :X, pX::Symbol = :pX) where {L,T}
+    q = quote end
+    st = sizeof(T)
+    for r ∈ 1:row_loads
+        push!(q.args, :( $(Symbol(A,:_,r)) = vload($V, $(A) + $((r-1)*L*st + rc*rows*st) )) )
+    end
+    for c ∈ 1:pₖ
+        push!(q.args, :( @inbounds $(Symbol(X,:_,c)) = $V($X[1,$c + $cc*$cols]) ))
+        for r ∈ 1:row_loads
+            push!(q.args, :( $(Symbol(D,:_,r,:_,c)) = $(Symbol(A,:_,r))*$(Symbol(X,:_,c)) ) )
+        end
+    end
+    q
+end
+function initialize_block(V::Type{Vec{L,T}}, row_loads, rows, cols, M, N, rc::Symbol, cc::Int, pₖ::Int = cols,
+            D::Symbol = :D, A::Symbol = :A, X::Symbol = :X, pX::Symbol = :pX) where {L,T}
+    q = quote end
+    st = sizeof(T)
+    # prefetch() && push!(q.args, :(prefetch($(pX) + $(c*N) + cc*$(cols*N), Val(3), Val(0))))
+    for r ∈ 1:row_loads
+        push!(q.args, :( $(Symbol(A,:_,r)) = vload($V, $(A) + $((r-1)*L*st) + $rc*$(rows*st) )) )
+        # prefetch() && push!(q.args, :(prefetch($(A) + $((r-1)*L*st-M*st + 2*M*st) + rc*$(rows*st), Val(3), Val(0))))
+        # push!(q.args, :( @show $(Symbol(A,:_,r)) ))
+    end
+    for c ∈ 1:pₖ
+        push!(q.args, :( @inbounds $(Symbol(X,:_,c)) = $V($X[1,$(c + cc*cols)]) ))
+        # push!(q.args, :( @inbounds $(Symbol(X,:_,c)) = ($V)(($X)[1,$(c + cc*cols)]) ) )
+        # push!(q.args, :( @show $(Symbol(X,:_,c)) ))
+        for r ∈ 1:row_loads
+            push!(q.args, :( $(Symbol(D,:_,r,:_,c)) = $(Symbol(A,:_,r))*$(Symbol(X,:_,c)) ) )
+            # push!(q.args, :( @show $(Symbol(D,:_,r,:_,c)) ))
+        end
+    end
+    q
+end
+function initialize_block(V::Type{Vec{L,T}}, row_loads, rows, cols, M, N, rc::Int, cc::Int, pₖ::Int = cols,
             D::Symbol = :D, A::Symbol = :A, X::Symbol = :X, pX::Symbol = :pX) where {L,T}
     q = quote end
     st = sizeof(T)
@@ -196,7 +485,7 @@ function initialize_block(V::Type{Vec{L,T}}, row_loads, rows, cols, M, N, rc::In
         # prefetch() && push!(q.args, :(prefetch($(A) + $((r-1)*L*st-M*st + 2*M*st) + rc*$(rows*st), Val(3), Val(0))))
         # push!(q.args, :( @show $(Symbol(A,:_,r)) ))
     end
-    for c ∈ 1:cols
+    for c ∈ 1:pₖ
         push!(q.args, :( @inbounds $(Symbol(X,:_,c)) = $V($X[1,$(c + cc*cols)]) ))
         # push!(q.args, :( @inbounds $(Symbol(X,:_,c)) = ($V)(($X)[1,$(c + cc*cols)]) ) )
         # push!(q.args, :( @show $(Symbol(X,:_,c)) ))
@@ -213,8 +502,7 @@ function fma_increment_block(V::Type{Vec{L,T}}, row_loads, rows, cols, M, N,
     st = sizeof(T)
     # prefetch() && push!(q.args, :(prefetch($(pX) + $(c*N) + cc*$(cols*N), Val(3), Val(0))))
     for r ∈ 1:row_loads
-        push!(q.args, :( $(Symbol(:p, A,:_,r)) = $(A) + $((r-1)*L*st-M*st) + rc*$(rows*st) + n*$(M*st) ))
-        push!(q.args, :( $(Symbol(A,:_,r)) = vload($V, $(Symbol(:p, A,:_,r)) )) )
+        push!(q.args, :( $(Symbol(A,:_,r)) = vload($V, $(A) + $((r-1)*L*st-M*st) + rc*$(rows*st) + n*$(M*st) )) )
         # prefetch() && push!(q.args, :(prefetch($(Symbol(:p, A,:_,r)) + $(M*st) , Val(3), Val(0))))
         # + $(r*vector_length*st-M*st) + rc*$(rows*st) + n*$(M*st) )) )
         # push!(q.args, :( @show $(Symbol(A,:_,r)) ))
@@ -230,54 +518,54 @@ function fma_increment_block(V::Type{Vec{L,T}}, row_loads, rows, cols, M, N,
     end
     q
 end
-
-function fma_increment_block(V::Type{Vec{L,T}}, row_loads, rows, cols, M, N, rc::Int, cc::Int, n::Int,
+function fma_increment_block(V::Type{Vec{L,T}}, row_loads, rows, cols, M, N, rc::Symbol, cc::Int, pₖ::Int = cols,
                             D::Symbol = :D, A::Symbol = :A, X::Symbol = :X) where {L,T}
     q = quote end
     st = sizeof(T)
-    # prefetch() && push!(q.args, :(prefetch($(pX) + $(c*N) + cc*$(cols*N), Val(3), Val(0))))
     for r ∈ 1:row_loads
-        push!(q.args, :( $(Symbol(:p, A,:_,r)) = $(A) + $((r-1)*L*st-M*st + rc*rows*st + n*M*st) ))
-        push!(q.args, :( $(Symbol(A,:_,r)) = vload($V, $(Symbol(:p, A,:_,r)) )) )
-        # prefetch() && push!(q.args, :(prefetch($(Symbol(:p, A,:_,r)) + $(M*st) , Val(3), Val(0))))
-        # + $(r*vector_length*st-M*st) + rc*$(rows*st) + n*$(M*st) )) )
-        # push!(q.args, :( @show $(Symbol(A,:_,r)) ))
+        push!(q.args, :( $(Symbol(A,:_,r)) = vload($V, $(A) + $((r-1)*L*st-M*st) + n*$(M*st) + $rc*$(rows*st)  ) ))
     end
-    for c ∈ 1:cols
-        push!(q.args, :( @inbounds @inbounds $(Symbol(X,:_,c)) = $V($X[$n,$(c + cc*cols)])) )
-        # push!(q.args, :( @inbounds $(Symbol(X,:_,c)) = ($V)($(X)[$n,$(c + cc*cols)]) ) )
-        # push!(q.args, :( @show $(Symbol(X,:_,c)) ))
+    for c ∈ 1:pₖ
+        push!(q.args, :( @inbounds $(Symbol(X,:_,c)) = $V($X[n,$(c + cc*cols)])) )
         for r ∈ 1:row_loads
             push!(q.args, :( $(Symbol(D,:_,r,:_,c)) = fma( $(Symbol(A,:_,r)),$(Symbol(X,:_,c)),$(Symbol(D,:_,r,:_,c))) ) )
-            # push!(q.args, :( @show $(Symbol(D,:_,r,:_,c)) ))
+        end
+    end
+    q
+end
+function fma_increment_block(V::Type{Vec{L,T}}, row_loads, rows, cols, M, N, rc::Int, cc::Symbol, pₖ::Int = cols,
+                            D::Symbol = :D, A::Symbol = :A, X::Symbol = :X) where {L,T}
+    q = quote end
+    st = sizeof(T)
+    for r ∈ 1:row_loads
+        push!(q.args, :( $(Symbol(A,:_,r)) = vload($V, $(A) + $((r-1)*L*st-M*st + rc*rows*st) + n*$(M*st) )) )
+    end
+    for c ∈ 1:pₖ
+        push!(q.args, :( @inbounds $(Symbol(X,:_,c)) = $V($X[n, $c + $cc*$cols])))
+        for r ∈ 1:row_loads
+            push!(q.args, :( $(Symbol(D,:_,r,:_,c)) = fma( $(Symbol(A,:_,r)),$(Symbol(X,:_,c)),$(Symbol(D,:_,r,:_,c))) ) )
+        end
+    end
+    q
+end
+
+function fma_increment_block(V::Type{Vec{L,T}}, row_loads, rows, cols, M, N, rc::Int, cc::Int, pₖ::Int = cols,
+                            D::Symbol = :D, A::Symbol = :A, X::Symbol = :X) where {L,T}
+    q = quote end
+    st = sizeof(T)
+    for r ∈ 1:row_loads
+        push!(q.args, :( $(Symbol(A,:_,r)) = vload($V, $(A) + $((r-1)*L*st-M*st + rc*rows*st) + n*$(M*st) )) )
+    end
+    for c ∈ 1:pₖ
+        push!(q.args, :( @inbounds $(Symbol(X,:_,c)) = $V($X[n,$(c + cc*cols)])) )
+        for r ∈ 1:row_loads
+            push!(q.args, :( $(Symbol(D,:_,r,:_,c)) = fma( $(Symbol(A,:_,r)),$(Symbol(X,:_,c)),$(Symbol(D,:_,r,:_,c))) ) )
         end
     end
     q
 end
 
 
-@generated function jmulkernel!(D::MMatrix{M,P,T}, A::MMatrix{M,N,T}, X::MMatrix{N,P,T}) where {T,M,N,P}
-
-    vector_length, rows, cols = pick_kernel_size(T) #VL = VecLength
-    V = Vec{vector_length, T}
-    row_loads = rows ÷ vector_length
-    q = quote
-        # pD = pointer(D)
-        pA = pointer(A)
-        pD = pointer(D)
-        @inbounds begin
-            $(initialize_block(V, row_loads, rows, cols, M, N, 0, 0, :pD, :pA))
-        end
-        D
-    end
-    qa = q.args[6].args[3].args
-    for n ∈ 2:N
-        push!(qa, fma_increment_block(V, row_loads, rows, cols, M, N, 0,0,n, :pD, :pA))
-    end
-    push!(qa, store_block(V, row_loads, rows, cols, M, 0, 0, :pD))
-
-    q
-end
 
 # Was deprecated in 0.7
 # @inline sub2ind((M,N)::Tuple{Int,Int}, i, j) = i + (j-1)*M

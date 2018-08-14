@@ -1,7 +1,43 @@
 # Need to turn this to actual tests.
 
+using SIMDArrays, StaticArrays, LinearAlgebra, BenchmarkTools
+b = SIMDArrays.randsimd(13,11);
+c = SIMDArrays.randsimd(11,12);
+d = SIMDArrays.randsimd(13,12);
+mul!(d, b, c); d
+
+smd = MMatrix{13,12}(d);# smd .= d;
+smb = MMatrix{13,11}(b); smb .= b;
+smc = MMatrix{11,12}(c); smc .= c;
+mul!(smd, smb, smc)
+BLAS.set_num_threads(1)
+
+@benchmark mul!($smd, $smb, $smc)
+@benchmark mul!($d, $b, $c)
 
 
+using SIMDArrays, StaticArrays, LinearAlgebra, BenchmarkTools
+function copyloop!(x, y)
+    @boundscheck size(x) == size(y) || throw(BoundsError())
+    @inbounds for i ∈ eachindex(x,y)
+        x[i] = y[i]
+    end
+end
+
+M,N,P = 128, 128, 128
+d = SIMDArrays.randsimd(M,P);
+a = SIMDArrays.randsimd(M,N);
+x = SIMDArrays.randsimd(N,P);
+mul!(d, a, x);
+d[1:10,1:10]
+
+smd = MMatrix{M,P,Float64}(undef);# smd .= d;
+sma = MMatrix{M,N,Float64}(undef); copyloop!(sma, a)
+smx = MMatrix{N,P,Float64}(undef); copyloop!(smx, x)
+mul!(smd, sma, smx)
+
+@benchmark mul!($smd, $sma, $smx)
+@benchmark mul!($d, $a, $x)
 
 
 using OhMyREPL, jBLAS, BenchmarkTools, LinearAlgebra

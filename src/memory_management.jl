@@ -1,4 +1,18 @@
-using Base: llvmcall
+using Core.Intrinsics: llvmcall
+
+struct PrefetchA
+    A::Int
+end
+struct PrefetchX
+    X::Int
+end
+struct PrefetchAX
+    A::Int
+    X::Int
+end
+
+# Base.:+(ptr::Ptr, offset::Prefetch) = ptr + offset.offset
+# Base.:+(offset::Prefetch, ptr::Ptr) = ptr + offset.offset
 
 # args are address, read/write, locality, cache type
 @generated function prefetch(address, ::Val{Locality} = Val(1), ::Val{RorW} = Val(0)) where {Locality, RorW}
@@ -38,7 +52,9 @@ function blocking_structure(M, N, P, ::Type{T} = Float64; cache_size::NTuple{3,I
     total_elements = M*N*D_count + N*P*A_count + M*P*X_count
     L1, L2, L3 = cache_size .÷ sizeof(T)
     if L1 > total_elements
-        return ((M,N,P),(M,N,P),(M,N,P)),0
+        epr, m_1, p_1 = pick_kernel_size(T, D_count = D_count, A_count = A_count, X_count = X_count)
+        return ((m_1,N,p_1),(M,N,P),(M,N,P)),0
+        # return ((M,N,P),(M,N,P),(M,N,P)),0
     end
 
     epr, m_1, p_1 = pick_kernel_size(T, D_count = D_count, A_count = A_count, X_count = X_count)
@@ -89,7 +105,7 @@ end
 
 function divide_into_rough_square(L, M, P, n, mbase, pbase)
     L_upper_bound = floor(Int, sqrt(abs2(n) + L) - n)
-    m_2 = L_upper_bound ÷ mbase * mbase
+    m_2 = max(round_x_to_nearest_y(L_upper_bound, mbase), mbase)
     if m_2 > M
         m_2 = M
         p_2 = min(P, (L - m_2*n) ÷ (m_2 + n) )

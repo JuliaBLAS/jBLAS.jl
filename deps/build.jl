@@ -8,7 +8,7 @@ if cpuvendor() == :Intel
     cache_size = CpuId.cachesize()
     num_cores = CpuId.cpucores()
 elseif cpuvendor() == :AMD
-    if Sys.CPU_NAME == "zenver1"
+    if Sys.CPU_NAME == "znver1"
         num_cores = CpuId.CPU_THREADS() > 4 ? CpuId.CPU_THREADS() ÷ 2 : 4
         cache_size = (32768, 524288, num_cores > 8 ? 524288 << 5 : 524288 << 4 )
     else
