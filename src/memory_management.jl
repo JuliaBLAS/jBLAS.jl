@@ -98,7 +98,8 @@ function blocking_structure(M, N, P, ::Type{T} = Float64; cache_size::NTuple{3,I
     Dmp_2 = m_2 * p_2
     n_3 = (L3 - Dmp_2) ÷ (m_2 + p_2)
     if n_3 > N
-        m_3, p_3 = divide_into_rough_square(L3, M, P, n_3, m_2, p_2)#, D_count = D_count, A_count = A_count, X_count = X_count)
+        n_3 = N
+        m_3, p_3 = divide_into_rough_square(L3, M, P, N, m_2, p_2)#, D_count = D_count, A_count = A_count, X_count = X_count)
     else
         m_3, p_3 = m_2, p_2
     end
