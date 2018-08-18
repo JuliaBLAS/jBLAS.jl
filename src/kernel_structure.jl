@@ -76,6 +76,7 @@ function pick_kernel_size(::Type{T}; D_count = 1, A_count = 1, X_count = 1) wher
     many_rows = round_x_to_nearest_y(approx, elements_in_cacheline, RoundUp)
     few_rows  = round_x_to_nearest_y(approx, elements_in_cacheline, RoundDown)
     mr_cols, mr_al = num_cols_and_loads(many_rows, elements_per_register)
+    few_rows < 1 && return elements_per_register, many_rows, mr_cols
     fr_cols, fr_al = num_cols_and_loads(few_rows,  elements_per_register)
     if many_rows * mr_cols / (mr_cols + mr_al) < few_rows * fr_cols / (fr_cols + fr_al)
         return elements_per_register, few_rows, fr_cols
