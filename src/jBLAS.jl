@@ -4,7 +4,8 @@ module jBLAS
 using StaticArrays, LinearAlgebra, Random, SIMD, Base.Cartesian
 
 export mrandn,
-        jmul!
+        jmul!,
+        prefetch
 
 # include("simd.jl") # Maybe use that as a fallback for custom number types? Eg, so it works with min-plus algebra?
 include("cpu_info.jl")

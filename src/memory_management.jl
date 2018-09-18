@@ -15,6 +15,16 @@ end
 # Base.:+(offset::Prefetch, ptr::Ptr) = ptr + offset.offset
 
 # args are address, read/write, locality, cache type
+
+"""
+prefetch(address, Val(Locality), Val(ReadOrWrite))
+Locality gives locality of the prefetch.
+Read = 0, write = 1.
+
+From LLVM documentation:
+
+address is the address to be prefetched, rw is the specifier determining if the fetch should be for a read (0) or write (1), and locality is a temporal locality specifier ranging from (0) - no locality, to (3) - extremely local keep in cache. The cache type specifies whether the prefetch is performed on the data (1) or instruction (0) cache. The rw, locality and cache type arguments must be constant integers.
+"""
 @generated function prefetch(address, ::Val{Locality} = Val(1), ::Val{RorW} = Val(0)) where {Locality, RorW}
     prefetch_call_string = """%addr = inttoptr i64 %0 to i8*
     call void @llvm.prefetch(i8* %addr, i32 $RorW, i32 $Locality, i32 1)
@@ -92,7 +102,11 @@ function blocking_structure(M, N, P, ::Type{T} = Float64; cache_size::NTuple{3,I
     m_2, p_2 = divide_into_rough_square(L2, M, P, n_2, m_1, p_1)#, D_count = D_count, A_count = A_count, X_count = X_count)
 
     if L3 > total_elements
-        return ((m_1, n_1, p_1), (m_2, n_2, p_2), (M, N, P)),2
+        # if m_2 == M && p_2 == P
+        #     return ((m_1, n_1, p_1), (M, N, p_2), (M, N, P)),1
+        # else
+            return ((m_1, n_1, p_1), (m_2, n_2, p_2), (M, N, P)),2
+        # end
     end
 
     Dmp_2 = m_2 * p_2
@@ -108,15 +122,36 @@ function blocking_structure(M, N, P, ::Type{T} = Float64; cache_size::NTuple{3,I
 
 end
 
+# function divide_into_rough_square(L, M, P, n, mbase, pbase)
+#     L_upper_bound = floor(Int, sqrt(abs2(n) + L) - n)
+#     m_2 = max(round_x_to_nearest_y(L_upper_bound, mbase), mbase)
+#     if m_2 >= M
+#         m_2 = M
+#         p_2 = min(P, (L - m_2*n) ÷ (m_2 + n) )
+#     else
+#         p_2 = L_upper_bound ÷ pbase * pbase
+#         if p_2 >= P
+#             p_2 = P
+#             m_2 = min(M, (L - p_2*n) ÷ (p_2 + n) )
+#         end
+#     end
+#     m_2, p_2
+# end
 function divide_into_rough_square(L, M, P, n, mbase, pbase)
+    Mhalf = max(round_x_to_nearest_y(M>>1, mbase), mbase)
+    Phalf = max(round_x_to_nearest_y(P>>1, pbase), pbase)
+    bsize = Mhalf*Phalf + Mhalf*n + n*Phalf
+    if bsize < L
+        return Mhalf, Phalf
+    end
     L_upper_bound = floor(Int, sqrt(abs2(n) + L) - n)
     m_2 = max(round_x_to_nearest_y(L_upper_bound, mbase), mbase)
-    if m_2 > M
+    if m_2 >= M
         m_2 = M
         p_2 = min(P, (L - m_2*n) ÷ (m_2 + n) )
     else
         p_2 = L_upper_bound ÷ pbase * pbase
-        if p_2 > P
+        if p_2 >= P
             p_2 = P
             m_2 = min(M, (L - p_2*n) ÷ (p_2 + n) )
         end

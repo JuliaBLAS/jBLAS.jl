@@ -1,5 +1,7 @@
 
 """
+Base.@pure Kernel(Mₖ,N,Pₖ,stride_AD,stride_X) = Kernel{Mₖ,Pₖ,stride_AD,stride_X,N}()
+
 The kernel is typed based on M and P. M is a critical component of vector length,
 while the kernel is unrolled across P. It simply loops over N.
 """
