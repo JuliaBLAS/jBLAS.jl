@@ -30,13 +30,17 @@ the number of rows and columns...
 function kernel_size_summary(::Type{T} = Float64) where T
     T_size = sizeof(T)
     num_per_register = REGISTER_SIZE ÷ T_size
-    cache_line = CACHELINE_SIZE ÷ T_size
+    cache_line = num_per_register 
+    # cache_line = CACHELINE_SIZE ÷ T_size
     max_total = num_per_register * REGISTER_COUNT
     num_cache_lines = cld(max_total, cache_line)
     summary = Matrix{Float64}(undef, 5, num_cache_lines)
-    for num_row_cachelines ∈ 1:num_cache_lines
-        num_cols, a_loads = num_cols_and_loads(num_rows, num_per_register)
-        summary[:, num_row_cachelines] .= (num_rows, num_cols, num_rows * num_cols, num_cols + a_loads, num_rows * num_cols / (num_cols + a_loads))
+    for a_loads ∈ 1:num_cache_lines
+        num_rows = a_loads * REGISTER_SIZE
+        num_cols = (REGISTER_COUNT - a_loads - 1) ÷ a_loads # assumes we need only a single B
+        length_D = num_rows * num_cols
+        num_loads = num_cols + a_loads
+        summary[:, a_loads] .= (num_rows, num_cols, length_D, num_loads, length_D / num_loads)
         if num_cols == 0
             println("A * X = D; nrow(D), ncol(D), length(D), NumRegeristersLoaded")
             return summary[:, 1:num_row_cachelines]
@@ -72,18 +76,43 @@ will be maximized with relatively square blocks, making that friendliest for the
 function pick_kernel_size(::Type{T}; D_count = 1, A_count = 1, X_count = 1) where T
     T_size = sizeof(T)
     elements_per_register = REGISTER_SIZE ÷ T_size
-    elements_in_cacheline = CACHELINE_SIZE ÷ T_size
-    elements_in_registers = elements_per_register * REGISTER_COUNT
-    approx = sqrt(0.25 + elements_per_register * (REGISTER_COUNT-2)) - 0.5
-    many_rows = round_x_to_nearest_y(approx, elements_in_cacheline, RoundUp)
-    few_rows  = round_x_to_nearest_y(approx, elements_in_cacheline, RoundDown)
-    mr_cols, mr_al = num_cols_and_loads(many_rows, elements_per_register)
-    few_rows < 1 && return elements_per_register, many_rows, mr_cols
-    fr_cols, fr_al = num_cols_and_loads(few_rows,  elements_per_register)
-    if many_rows * mr_cols / (mr_cols + mr_al) < few_rows * fr_cols / (fr_cols + fr_al)
-        return elements_per_register, few_rows, fr_cols
-    else
-        return elements_per_register, many_rows, mr_cols
+    cache_line = elements_per_register
+    # cache_line = CACHELINE_SIZE ÷ T_size
+    max_total = elements_per_register * REGISTER_COUNT
+    num_cache_lines = cld(max_total, cache_line)
+    prev_num_rows, prev_num_cols = 0, 0
+    prev_ratio = -Inf
+    for a_loads ∈ 1:num_cache_lines
+        num_rows = a_loads * elements_per_register
+        num_cols = (REGISTER_COUNT - a_loads - 1) ÷ a_loads # assumes we need only a single B
+        length_D = num_rows * num_cols
+        num_loads = num_cols + a_loads
+        next_ratio = length_D / num_loads
+        if next_ratio < prev_ratio
+            break
+        else
+            prev_ratio = next_ratio
+            prev_num_rows, prev_num_cols = num_rows, num_cols
+        end
     end
+    elements_per_register, prev_num_rows, prev_num_cols
 end
+# function pick_kernel_size(::Type{T}; D_count = 1, A_count = 1, X_count = 1) where T
+#     T_size = sizeof(T)
+#     elements_per_register = REGISTER_SIZE ÷ T_size
+#     elements_in_cacheline = elements_per_register
+#     # elements_in_cacheline = CACHELINE_SIZE ÷ T_size
+#     elements_in_registers = elements_per_register * REGISTER_COUNT
+#     approx = sqrt(0.25 + elements_per_register * (REGISTER_COUNT-2)) - 0.5
+#     many_rows = round_x_to_nearest_y(approx, elements_in_cacheline, RoundUp)
+#     few_rows  = round_x_to_nearest_y(approx, elements_in_cacheline, RoundDown)
+#     mr_cols, mr_al = num_cols_and_loads(many_rows, elements_per_register)
+#     few_rows < 1 && return elements_per_register, many_rows, mr_cols
+#     fr_cols, fr_al = num_cols_and_loads(few_rows,  elements_per_register)
+#     if many_rows * mr_cols / (mr_cols + mr_al) < few_rows * fr_cols / (fr_cols + fr_al)
+#         return elements_per_register, few_rows, fr_cols
+#     else
+#         return elements_per_register, many_rows, mr_cols
+#     end
+# end
 # pick_kernel_size(::Type{Core.VecElement{T}}) where T = pick_kernel_size(T)

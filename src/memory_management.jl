@@ -11,6 +11,7 @@ struct PrefetchAX
     X::Int
 end
 
+
 # Base.:+(ptr::Ptr, offset::Prefetch) = ptr + offset.offset
 # Base.:+(offset::Prefetch, ptr::Ptr) = ptr + offset.offset
 
