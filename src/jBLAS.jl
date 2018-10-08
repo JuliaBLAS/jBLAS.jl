@@ -1,7 +1,7 @@
 # __precompile__()
 module jBLAS
 
-using StaticArrays, LinearAlgebra, Random, SIMD, Base.Cartesian
+using StaticArrays, LinearAlgebra, Random, SIMDPirates, Base.Cartesian
 
 export mrandn,
         jmul!,

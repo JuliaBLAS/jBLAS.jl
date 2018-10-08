@@ -10,7 +10,21 @@ struct PrefetchAX
     A::Int
     X::Int
 end
-
+prefetch_A(::Any)    = (nothing, nothing)
+prefetch_X(::Any)    = (nothing, nothing, nothing)
+function prefetch_A(::Type{PF}) where {PF <: Union{PrefetchA, PrefetchAX}}
+    (
+        :(@nexprs $Qₚ q -> prefetch(pA + pf.A + $CACHELINE_SIZE*(q-1), Val(3), Val(0))),
+        :(@nexprs $Qₚ q -> prefetch(pA + pf.A + n*$AD_stride + $CACHELINE_SIZE*(q-1), Val(3), Val(0)))
+    )
+end
+function prefetch_X(::Type{PrefetchX})
+    (
+        :(@nexprs $Pₖ p -> prefetch(pX + pf.X + (p-1)*$X_stride, Val(3), Val(0))),
+        :(@nexprs $Pₖ p -> prefetch(pX + pf.X + n₁*$T_size + (p-1)*$X_stride, Val(3), Val(0))),
+        :(prefetch(pX + pf.X + $(N*T_size) + (p-1)*$X_stride, Val(3), Val(0)))
+    )
+end
 
 # Base.:+(ptr::Ptr, offset::Prefetch) = ptr + offset.offset
 # Base.:+(offset::Prefetch, ptr::Ptr) = ptr + offset.offset
