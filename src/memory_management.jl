@@ -10,19 +10,21 @@ struct PrefetchAX
     A::Int
     X::Int
 end
-prefetch_A(::Any)    = (nothing, nothing)
-prefetch_X(::Any)    = (nothing, nothing, nothing)
-function prefetch_A(::Type{PF}) where {PF <: Union{PrefetchA, PrefetchAX}}
+prefetch_A(::Any, ::Any)    = (nothing, nothing, nothing)
+prefetch_X(::Any, ::Any, ::Any)    = (nothing, nothing, nothing, nothing)
+function prefetch_A(::Type{PF}, N) where {PF <: Union{PrefetchA, PrefetchAX}}
     (
         :(@nexprs $Qₚ q -> prefetch(pA + pf.A + $CACHELINE_SIZE*(q-1), Val(3), Val(0))),
-        :(@nexprs $Qₚ q -> prefetch(pA + pf.A + n*$AD_stride + $CACHELINE_SIZE*(q-1), Val(3), Val(0)))
+        :(@nexprs $Qₚ q -> prefetch(pA + pf.A + n*$AD_stride + $CACHELINE_SIZE*(q-1), Val(3), Val(0))),
+        :(@nexprs $Qₚ q -> prefetch(pA + pf.A + $((N-1)*AD_stride) + $CACHELINE_SIZE*(q-1), Val(3), Val(0)))
     )
 end
-function prefetch_X(::Type{PrefetchX})
+function prefetch_X(::Type{PrefetchX}, N, Pₖ)
     (
         :(@nexprs $Pₖ p -> prefetch(pX + pf.X + (p-1)*$X_stride, Val(3), Val(0))),
         :(@nexprs $Pₖ p -> prefetch(pX + pf.X + n₁*$T_size + (p-1)*$X_stride, Val(3), Val(0))),
-        :(prefetch(pX + pf.X + $(N*T_size) + (p-1)*$X_stride, Val(3), Val(0)))
+        :(prefetch(pX + pf.X + $(N*T_size) + (p-1)*$X_stride, Val(3), Val(0))),
+        :(prefetch(pX + pf.X + $(N*T_size + (Pₖ-1)*X_stride), Val(3), Val(0)))
     )
 end
 
