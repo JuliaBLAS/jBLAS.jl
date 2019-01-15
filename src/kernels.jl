@@ -232,7 +232,7 @@ function kernel_quote(Mₖ,Pₖ,stride_AD,stride_X,N,T)
             @nexprs $Q q -> vA_q = vload($V, pA + n*$AD_stride + $REGISTER_SIZE*(q-1))
             @nexprs $Pₖ p -> begin
                 vX = $vbroadcast($V, unsafe_load(pX + n*$T_size + (p-1)*$X_stride))
-                @nexprs $Q q -> Dx_p_q = fma(vA_q, vX, Dx_p_q)
+                @nexprs $Q q -> Dx_p_q = vfma(vA_q, vX, Dx_p_q)
             end
         end
         @nexprs $Pₖ p -> @nexprs $Q q -> vstore(Dx_p_q, pD + $REGISTER_SIZE*(q-1) + $AD_stride*(p-1))
@@ -266,7 +266,7 @@ function initkernel_quote(Mₖ,Pₖ,stride_AD,stride_X,N,T)
             @nexprs $Q q -> vA_q = vload($V, pA + n*$AD_stride + $REGISTER_SIZE*(q-1))
             @nexprs $Pₖ p -> begin
                 vX = $V(unsafe_load(pX + n*$T_size + (p-1)*$X_stride))
-                @nexprs $Q q -> Dx_p_q = fma(vA_q, vX, Dx_p_q)
+                @nexprs $Q q -> Dx_p_q = vfma(vA_q, vX, Dx_p_q)
             end
         end
         @nexprs $Pₖ p -> @nexprs $Q q -> vstore(Dx_p_q, pD + $REGISTER_SIZE*(q-1) + $AD_stride*(p-1))
@@ -299,7 +299,7 @@ end
                 @nexprs $Q q -> vA_q = vload($V, pA + n*$AD_stride + $REGISTER_SIZE*(q-1))
                 @nexprs $Pₖ p -> begin
                     vX = $V(unsafe_load(pX + n*$T_size + (p-1)*$X_stride))
-                    @nexprs $Q q -> Dx_p_q = fma(vA_q, vX, Dx_p_q)
+                    @nexprs $Q q -> Dx_p_q = vfma(vA_q, vX, Dx_p_q)
                 end
                 @nexprs $Qₚ q -> prefetch(pA + pf.A + n*$AD_stride + $CACHELINE_SIZE*(q-1), Val(3), Val(0))
             end
@@ -309,7 +309,7 @@ end
             @nexprs $Q q -> vA_q = vload($V, pA + n*$AD_stride + $REGISTER_SIZE*(q-1))
             @nexprs $Pₖ p -> begin
                 vX = $V(unsafe_load(pX + n*$T_size + (p-1)*$X_stride))
-                @nexprs $Q q -> Dx_p_q = fma(vA_q, vX, Dx_p_q)
+                @nexprs $Q q -> Dx_p_q = vfma(vA_q, vX, Dx_p_q)
             end
             @nexprs $Qₚ q -> prefetch(pA + pf.A + n*$AD_stride + $CACHELINE_SIZE*(q-1), Val(3), Val(0))
         end
@@ -346,7 +346,7 @@ end
             @nexprs $Q q -> vA_q = vload($V, pA + n*$AD_stride + $REGISTER_SIZE*(q-1))
             @nexprs $Pₖ p -> begin
                 vX = $V(unsafe_load(pX + n*$T_size + (p-1)*$X_stride))
-                @nexprs $Q q -> Dx_p_q = fma(vA_q, vX, Dx_p_q)
+                @nexprs $Q q -> Dx_p_q = vfma(vA_q, vX, Dx_p_q)
             end
             @nexprs $Qₚ q -> prefetch(pA + pf.A + n*$AD_stride + $CACHELINE_SIZE*(q-1), Val(3), Val(0))
         end
@@ -356,7 +356,7 @@ end
                 @nexprs $Q q -> vA_q = vload($V, pA + n*$AD_stride + $REGISTER_SIZE*(q-1))
                 @nexprs $Pₖ p -> begin
                     vX = $V(unsafe_load(pX + n*$T_size + (p-1)*$X_stride))
-                    @nexprs $Q q -> Dx_p_q = fma(vA_q, vX, Dx_p_q)
+                    @nexprs $Q q -> Dx_p_q = vfma(vA_q, vX, Dx_p_q)
                 end
                 @nexprs $Qₚ q -> prefetch(pA + pf.A + n*$AD_stride + $CACHELINE_SIZE*(q-1), Val(3), Val(0))
             end
@@ -366,7 +366,7 @@ end
             @nexprs $Q q -> vA_q = vload($V, pA + n*$AD_stride + $REGISTER_SIZE*(q-1))
             @nexprs $Pₖ p -> begin
                 vX = $V(unsafe_load(pX + n*$T_size + (p-1)*$X_stride))
-                @nexprs $Q q -> Dx_p_q = fma(vA_q, vX, Dx_p_q)
+                @nexprs $Q q -> Dx_p_q = vfma(vA_q, vX, Dx_p_q)
             end
             @nexprs $Qₚ q -> prefetch(pA + pf.A + n*$AD_stride + $CACHELINE_SIZE*(q-1), Val(3), Val(0))
         end
@@ -399,7 +399,7 @@ end
             @nexprs $Q q -> vA_q = vload($V, pA + n*$AD_stride + $REGISTER_SIZE*(q-1))
             @nexprs $Pₖ p -> begin
                 vX = $V(unsafe_load(pX + n*$T_size + (p-1)*$X_stride))
-                @nexprs $Q q -> Dx_p_q = fma(vA_q, vX, Dx_p_q)
+                @nexprs $Q q -> Dx_p_q = vfma(vA_q, vX, Dx_p_q)
             end
             @nexprs $Qₚ q -> prefetch(pA + pf.A + n*$AD_stride + $CACHELINE_SIZE*(q-1), Val(3), Val(0))
         end
@@ -435,7 +435,7 @@ end
             @nexprs $Q q -> vA_q = vload($V, pA + n*$AD_stride + $REGISTER_SIZE*(q-1))
             @nexprs $Pₖ p -> begin
                 vX = $V(unsafe_load(pX + n*$T_size + (p-1)*$X_stride))
-                @nexprs $Q q -> Dx_p_q = fma(vA_q, vX, Dx_p_q)
+                @nexprs $Q q -> Dx_p_q = vfma(vA_q, vX, Dx_p_q)
             end
             @nexprs $Qₚ q -> prefetch(pA + pf.A + n*$AD_stride + $CACHELINE_SIZE*(q-1), Val(3), Val(0))
         end
@@ -466,7 +466,7 @@ end
                 @nexprs $Q q -> vA_q = vload($V, pA + n*$AD_stride + $REGISTER_SIZE*(q-1))
                 @nexprs $Pₖ p -> begin
                     vX = $V(unsafe_load(pX + n*$T_size + (p-1)*$X_stride))
-                    @nexprs $Q q -> Dx_p_q = fma(vA_q, vX, Dx_p_q)
+                    @nexprs $Q q -> Dx_p_q = vfma(vA_q, vX, Dx_p_q)
                 end
             end
             @nexprs $Pₖ p -> prefetch(pX + pf.X + n₁*$T_size + (p-1)*$X_stride, Val(3), Val(0))
@@ -475,7 +475,7 @@ end
             @nexprs $Q q -> vA_q = vload($V, pA + n*$AD_stride + $REGISTER_SIZE*(q-1))
             @nexprs $Pₖ p -> begin
                 vX = $V(unsafe_load(pX + n*$T_size + (p-1)*$X_stride))
-                @nexprs $Q q -> Dx_p_q = fma(vA_q, vX, Dx_p_q)
+                @nexprs $Q q -> Dx_p_q = vfma(vA_q, vX, Dx_p_q)
             end
         end
         @nexprs $Pₖ p -> begin
@@ -510,7 +510,7 @@ end
             @nexprs $Q q -> vA_q = vload($V, pA + n*$AD_stride + $REGISTER_SIZE*(q-1))
             @nexprs $Pₖ p -> begin
                 vX = $V(unsafe_load(pX + n*$T_size + (p-1)*$X_stride))
-                @nexprs $Q q -> Dx_p_q = fma(vA_q, vX, Dx_p_q)
+                @nexprs $Q q -> Dx_p_q = vfma(vA_q, vX, Dx_p_q)
             end
         end
         @nexprs $Pₖ p -> prefetch(pX + pf.X + (p-1)*$X_stride, Val(3), Val(0))
@@ -519,7 +519,7 @@ end
                 @nexprs $Q q -> vA_q = vload($V, pA + n*$AD_stride + $REGISTER_SIZE*(q-1))
                 @nexprs $Pₖ p -> begin
                     vX = $V(unsafe_load(pX + n*$T_size + (p-1)*$X_stride))
-                    @nexprs $Q q -> Dx_p_q = fma(vA_q, vX, Dx_p_q)
+                    @nexprs $Q q -> Dx_p_q = vfma(vA_q, vX, Dx_p_q)
                 end
             end
             @nexprs $Pₖ p -> prefetch(pX + pf.X + n₁*$T_size + (p-1)*$X_stride, Val(3), Val(0))
@@ -528,7 +528,7 @@ end
             @nexprs $Q q -> vA_q = vload($V, pA + n*$AD_stride + $REGISTER_SIZE*(q-1))
             @nexprs $Pₖ p -> begin
                 vX = $V(unsafe_load(pX + n*$T_size + (p-1)*$X_stride))
-                @nexprs $Q q -> Dx_p_q = fma(vA_q, vX, Dx_p_q)
+                @nexprs $Q q -> Dx_p_q = vfma(vA_q, vX, Dx_p_q)
             end
         end
         @nexprs $Pₖ p -> begin
