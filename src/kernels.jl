@@ -44,7 +44,7 @@ function kernel_quote(Mₖ,Pₖ,stride_AD,stride_X,N,T,init,inline = false, pf =
     AD_stride = stride_AD * T_size
     X_stride = stride_X * T_size
     W = REGISTER_SIZE ÷ T_size
-    while W > 2Mₖ
+    while W >= 2Mₖ
         W >>= 1
     end
     WT = W * T_size
