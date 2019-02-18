@@ -257,6 +257,7 @@ function initkernel_quote(Mₖ,Pₖ,stride_AD,stride_X,N,T)
     end
     V = Vec{W,T}
     quote
+        $(Expr(:meta,:inline))
         @nexprs $Q q -> vA_q = vload($V, pA + $REGISTER_SIZE*(q-1))
         @nexprs $Pₖ p -> begin
             vX = vbroadcast($V, unsafe_load(pX + (p-1)*$X_stride))
