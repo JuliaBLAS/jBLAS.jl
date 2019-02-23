@@ -53,8 +53,8 @@ function kernel_quote(Mₖ,Pₖ,stride_AD,stride_X,N,T,init,inline = false, pf =
     if r == 0
         mask = :()
         A_load_expr = :(@nexprs $Q q -> vA_q = vload($V, pA + n*$AD_stride + $WT*(q-1)))
-        D_store1 = :(@nexprs $Q q -> vstore(Dx_p_q, pD + $WT*(q-1) + $AD_stride*(p-1)))
-        D_store2 = :(@nexprs $Q q -> vstore($(Symbol(:Dx_,Pₖ,:_q)), pD + $WT*(q-1) + $(AD_stride*(Pₖ-1))))
+        D_store1 = :(@nexprs $Q q -> vstore!(pD + $WT*(q-1) + $AD_stride*(p-1), Dx_p_q))
+        D_store2 = :(@nexprs $Q q -> vstore!(pD + $WT*(q-1) + $(AD_stride*(Pₖ-1)), $(Symbol(:Dx_,Pₖ,:_q))))
     else
         mask = mask_expr(W, r)
         if Q == 0
@@ -67,14 +67,10 @@ function kernel_quote(Mₖ,Pₖ,stride_AD,stride_X,N,T,init,inline = false, pf =
             Q += 1
             push!(A_load_expr.args, :($(Symbol(:vA_, Q)) = vload($V, pA + $((N-1)*AD_stride) + $(WT*(Q-1)), $mask)))
         end
-        # D_store1 = quote
-        #             @nexprs $(Q-1) q -> vstore(Dx_p_q, pD + $WT*(q-1) + $AD_stride*(p-1))
-        #             vstore($(Symbol(:Dx_p_, Q)), pD + $(WT*(Q-1)) + $AD_stride*(p-1), $mask)
-        #         end
-        D_store1 = :(@nexprs $Q q -> vstore(Dx_p_q, pD + $WT*(q-1) + $AD_stride*(p-1)))
+        D_store1 = :(@nexprs $Q q -> vstore!(pD + $WT*(q-1) + $AD_stride*(p-1), Dx_p_q))
         D_store2 = quote
-            @nexprs $(Q-1) q -> vstore($(Symbol(:Dx_,Pₖ,:_q)), pD + $WT*(q-1) + $(AD_stride*(Pₖ-1)))
-            vstore($(Symbol(:Dx_, Pₖ, :_, Q)), pD + $(WT*(Q-1) + AD_stride*(Pₖ-1)), $mask)
+            @nexprs $(Q-1) q -> vstore!(pD + $WT*(q-1) + $(AD_stride*(Pₖ-1)), $(Symbol(:Dx_,Pₖ,:_q)))
+            vstore!(pD + $(WT*(Q-1) + AD_stride*(Pₖ-1)), $(Symbol(:Dx_, Pₖ, :_, Q)), $mask)
         end
     end
     C = min(CACHELINE_SIZE ÷ T_size,N)
@@ -235,7 +231,7 @@ function kernel_quote(Mₖ,Pₖ,stride_AD,stride_X,N,T)
                 @nexprs $Q q -> Dx_p_q = vmuladd(vA_q, vX, Dx_p_q)
             end
         end
-        @nexprs $Pₖ p -> @nexprs $Q q -> vstore(Dx_p_q, pD + $REGISTER_SIZE*(q-1) + $AD_stride*(p-1))
+        @nexprs $Pₖ p -> @nexprs $Q q -> vstore!(pD + $REGISTER_SIZE*(q-1) + $AD_stride*(p-1), Dx_p_q)
         nothing
     end
 end
@@ -270,7 +266,7 @@ function initkernel_quote(Mₖ,Pₖ,stride_AD,stride_X,N,T)
                 @nexprs $Q q -> Dx_p_q = vmuladd(vA_q, vX, Dx_p_q)
             end
         end
-        @nexprs $Pₖ p -> @nexprs $Q q -> vstore(Dx_p_q, pD + $REGISTER_SIZE*(q-1) + $AD_stride*(p-1))
+        @nexprs $Pₖ p -> @nexprs $Q q -> vstore!(pD + $REGISTER_SIZE*(q-1) + $AD_stride*(p-1), Dx_p_q)
         nothing
     end
 end
@@ -316,7 +312,7 @@ end
         end
         @nexprs $Pₖ p -> begin
             prefetch(pX + pf.X + $(N*T_size) + (p-1)*$X_stride, Val(3), Val(0))
-            @nexprs $Q q -> vstore(Dx_p_q, pD + $REGISTER_SIZE*(q-1) + $AD_stride*(p-1))
+            @nexprs $Q q -> vstore!(pD + $REGISTER_SIZE*(q-1) + $AD_stride*(p-1), Dx_p_q)
         end
         nothing
     end
@@ -373,7 +369,7 @@ end
         end
         @nexprs $Pₖ p -> begin
             prefetch(pX + pf.X + $(N*T_size) + (p-1)*$X_stride, Val(3), Val(0))
-            @nexprs $Q q -> vstore(Dx_p_q, pD + $REGISTER_SIZE*(q-1) + $AD_stride*(p-1))
+            @nexprs $Q q -> vstore!(pD + $REGISTER_SIZE*(q-1) + $AD_stride*(p-1), Dx_p_q)
         end
         nothing
     end
@@ -404,7 +400,7 @@ end
             end
             @nexprs $Qₚ q -> prefetch(pA + pf.A + n*$AD_stride + $CACHELINE_SIZE*(q-1), Val(3), Val(0))
         end
-        @nexprs $Pₖ p -> @nexprs $Q q -> vstore(Dx_p_q, pD + $REGISTER_SIZE*(q-1) + $AD_stride*(p-1))
+        @nexprs $Pₖ p -> @nexprs $Q q -> vstore!(pD + $REGISTER_SIZE*(q-1) + $AD_stride*(p-1), Dx_p_q)
         nothing
     end
 end
@@ -440,7 +436,7 @@ end
             end
             @nexprs $Qₚ q -> prefetch(pA + pf.A + n*$AD_stride + $CACHELINE_SIZE*(q-1), Val(3), Val(0))
         end
-        @nexprs $Pₖ p -> @nexprs $Q q -> vstore(Dx_p_q, pD + $REGISTER_SIZE*(q-1) + $AD_stride*(p-1))
+        @nexprs $Pₖ p -> @nexprs $Q q -> vstore!(pD + $REGISTER_SIZE*(q-1) + $AD_stride*(p-1), Dx_p_q)
         nothing
     end
 end
@@ -481,7 +477,7 @@ end
         end
         @nexprs $Pₖ p -> begin
             prefetch(pX + pf.X + $(N*T_size) + (p-1)*$X_stride, Val(3), Val(0))
-            @nexprs $Q q -> vstore(Dx_p_q, pD + $REGISTER_SIZE*(q-1) + $AD_stride*(p-1))
+            @nexprs $Q q -> vstore!(pD + $REGISTER_SIZE*(q-1) + $AD_stride*(p-1), Dx_p_q)
         end
         nothing
     end
@@ -534,7 +530,7 @@ end
         end
         @nexprs $Pₖ p -> begin
             prefetch(pX + pf.X + $(N*T_size) + (p-1)*$X_stride, Val(3), Val(0))
-            @nexprs $Q q -> vstore(Dx_p_q, pD + $REGISTER_SIZE*(q-1) + $AD_stride*(p-1))
+            @nexprs $Q q -> vstore!(pD + $REGISTER_SIZE*(q-1) + $AD_stride*(p-1), Dx_p_q)
         end
         nothing
     end
